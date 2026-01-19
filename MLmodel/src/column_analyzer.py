@@ -96,6 +96,63 @@ Response:"""
     return extract_json_from_response(content)
 
 
+def call_openrouter_api(column_names: list[str], first_rows: list, api_key: str) -> dict:
+    """Call OpenRouter API to map column names to required fields."""
+    
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY environment variable not set")
+    
+    # Prepare the data summary for the prompt
+    csv_summary = f"Column names: {column_names}\n\nFirst 5 rows:\n"
+    for i, row in enumerate(first_rows):
+        csv_summary += f"Row {i+1}: {row}\n"
+    
+    prompt = f"""Analyze this CSV data and map the column names to the exact required fields.
+
+{csv_summary}
+
+Return ONLY a valid JSON object with these exact keys:
+- ProductName
+- Price
+- Rate
+- Review
+- Summary
+
+Each value must be a column name from the CSV (case-sensitive) or null if the field doesn't exist.
+
+Example response format (no markdown, no explanation):
+{{"ProductName": "product_name", "Price": "price", "Rate": "rating", "Review": "review_text", "Summary": "title"}}
+
+Response:"""
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    
+    payload = {
+        "model": "xiaomi/mimo-v2-flash:free",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0,
+    }
+    
+    response = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers=headers,
+        json=payload,
+        timeout=30
+    )
+    
+    response.raise_for_status()
+    response_data = response.json()
+    
+    if "choices" not in response_data or len(response_data["choices"]) == 0:
+        raise ValueError(f"Invalid API response: {response_data}")
+    
+    content = response_data["choices"][0]["message"]["content"]
+    return extract_json_from_response(content)
+
+
 def validate_mapping(mapping: dict, column_names: list[str]) -> dict:
     """Validate that all values in mapping are either null or valid column names."""
     required_keys = {"ProductName", "Price", "Rate", "Review", "Summary"}
@@ -110,24 +167,38 @@ def validate_mapping(mapping: dict, column_names: list[str]) -> dict:
     return mapping
 
 
-def analyze_columns_with_llm(column_names: list[str], first_rows: list, api_key: str = None) -> dict:
+def analyze_columns_with_llm(column_names: list[str], first_rows: list, google_api_key: str = None, openrouter_api_key: str = None) -> dict:
     """
     Analyze columns using LLM and return mapping.
     Can be imported by other modules.
-    Uses Google Gemini API.
+    Tries Google Gemini first, falls back to OpenRouter if it fails.
     """
-    if api_key is None:
-        api_key = os.getenv("GOOGLE_API_KEY")
+    if google_api_key is None:
+        google_api_key = os.getenv("GOOGLE_API_KEY")
     
-    if not api_key:
-        raise ValueError("GOOGLE_API_KEY environment variable is not set")
+    if openrouter_api_key is None:
+        openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
     
-    # Call API
-    mapping = call_google_gemini_api(column_names, first_rows, api_key)
+    # Try Google Gemini first
+    if google_api_key:
+        try:
+            print("Trying Google Gemini API...")
+            mapping = call_google_gemini_api(column_names, first_rows, google_api_key)
+            mapping = validate_mapping(mapping, column_names)
+            print("✅ Google Gemini API succeeded")
+            return mapping
+        except Exception as e:
+            print(f"⚠️ Google Gemini API failed: {str(e)[:100]}")
+            print("Falling back to OpenRouter...")
     
-    # Validate mapping
+    # Fallback to OpenRouter
+    if not openrouter_api_key:
+        raise ValueError("Both GOOGLE_API_KEY and OPENROUTER_API_KEY are not set")
+    
+    print("Using OpenRouter API...")
+    mapping = call_openrouter_api(column_names, first_rows, openrouter_api_key)
     mapping = validate_mapping(mapping, column_names)
-    
+    print("✅ OpenRouter API succeeded")
     return mapping
 
 
@@ -142,12 +213,13 @@ def main():
     column_names, first_rows = load_csv_data(csv_path)
     print(f"Found {len(column_names)} columns")
     
-    # Get API key
-    api_key = os.getenv("GOOGLE_API_KEY")
+    # Get API keys
+    google_api_key = os.getenv("GOOGLE_API_KEY")
+    openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
     
-    # Call wrapper function
-    print("Calling Google Gemini API for column mapping...")
-    mapping = analyze_columns_with_llm(column_names, first_rows, api_key)
+    # Call wrapper function (tries Gemini first, falls back to OpenRouter)
+    print("Analyzing columns with LLM...")
+    mapping = analyze_columns_with_llm(column_names, first_rows, google_api_key, openrouter_api_key)
     
     # Print final result
     print("\nFinal Mapping:")
