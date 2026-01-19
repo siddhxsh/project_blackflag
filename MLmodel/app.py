@@ -280,137 +280,137 @@ def analyze():
         
         try:
             # Check if file is uploaded
-        if 'file' not in request.files:
-            return jsonify({'error': 'No file uploaded'}), 400
-        
-        file = request.files['file']
-        if file.filename == '':
-            return jsonify({'error': 'Empty filename'}), 400
-        
-        # Save uploaded file
-        input_path = os.path.join(DATA_DIR, 'uploaded.csv')
-        try:
-            file.save(input_path)
-            print(f"File saved successfully to: {input_path}")
-        except Exception as e:
-            print(f"ERROR saving file: {str(e)}")
-            return jsonify({'error': f'Failed to save file: {str(e)}'}), 500
-        
-        # Read CSV with UTF-8 and replace invalid bytes
-        try:
-            df = pd.read_csv(input_path, encoding='utf-8', errors='replace')
-            print(f"Successfully read CSV with encoding: utf-8 (errors='replace')")
-        except Exception as e:
-            print(f"ERROR reading CSV: {str(e)}")
-            return jsonify({'error': f'Failed to read CSV: {str(e)}'}), 500
-        
-        # Step 1: Column Analysis
-        print("Step 1: Analyzing columns...")
-        try:
-            column_names = df.columns.tolist()
-            first_rows = df.head(5).values.tolist()
-            print(f"Columns: {column_names[:5]}...")
+            if 'file' not in request.files:
+                return jsonify({'error': 'No file uploaded'}), 400
             
+            file = request.files['file']
+            if file.filename == '':
+                return jsonify({'error': 'Empty filename'}), 400
+            
+            # Save uploaded file
+            input_path = os.path.join(DATA_DIR, 'uploaded.csv')
             try:
-                # Add timeout to prevent LLM hanging indefinitely
-                import signal
-                def timeout_handler(signum, frame):
-                    raise TimeoutError("LLM analysis timeout after 30s")
+                file.save(input_path)
+                print(f"File saved successfully to: {input_path}")
+            except Exception as e:
+                print(f"ERROR saving file: {str(e)}")
+                return jsonify({'error': f'Failed to save file: {str(e)}'}), 500
+            
+            # Read CSV with UTF-8 and replace invalid bytes
+            try:
+                df = pd.read_csv(input_path, encoding='utf-8', errors='replace')
+                print(f"Successfully read CSV with encoding: utf-8 (errors='replace')")
+            except Exception as e:
+                print(f"ERROR reading CSV: {str(e)}")
+                return jsonify({'error': f'Failed to read CSV: {str(e)}'}), 500
+            
+            # Step 1: Column Analysis
+            print("Step 1: Analyzing columns...")
+            try:
+                column_names = df.columns.tolist()
+                first_rows = df.head(5).values.tolist()
+                print(f"Columns: {column_names[:5]}...")
                 
-                signal.signal(signal.SIGALRM, timeout_handler)
-                signal.alarm(30)  # 30 second timeout
                 try:
-                    column_mapping = analyze_columns_with_llm(column_names, first_rows)
-                finally:
-                    signal.alarm(0)  # Cancel alarm
-            except (Exception, TimeoutError) as llm_err:
-                print(f"LLM column analysis failed ({type(llm_err).__name__}): {str(llm_err)[:100]}. Falling back to heuristic mapping.")
-                column_mapping = _heuristic_column_mapping(column_names)
-            print(f"Column mapping received: {list(column_mapping.keys())}")
+                    # Add timeout to prevent LLM hanging indefinitely
+                    import signal
+                    def timeout_handler(signum, frame):
+                        raise TimeoutError("LLM analysis timeout after 30s")
+                    
+                    signal.signal(signal.SIGALRM, timeout_handler)
+                    signal.alarm(30)  # 30 second timeout
+                    try:
+                        column_mapping = analyze_columns_with_llm(column_names, first_rows)
+                    finally:
+                        signal.alarm(0)  # Cancel alarm
+                except (Exception, TimeoutError) as llm_err:
+                    print(f"LLM column analysis failed ({type(llm_err).__name__}): {str(llm_err)[:100]}. Falling back to heuristic mapping.")
+                    column_mapping = _heuristic_column_mapping(column_names)
+                print(f"Column mapping received: {list(column_mapping.keys())}")
+                
+                # Save column mapping
+                mapping_path = os.path.join(os.path.dirname(BASE_DIR), 'column_mapping.json')
+                with open(mapping_path, 'w') as f:
+                    json.dump(column_mapping, f, indent=2)
+                print(f"Column mapping saved to: {mapping_path}")
+            except Exception as e:
+                print(f"ERROR in column analysis: {str(e)}")
+                return jsonify({'error': f'Column analysis failed: {str(e)}'}), 500
             
-            # Save column mapping
-            mapping_path = os.path.join(os.path.dirname(BASE_DIR), 'column_mapping.json')
-            with open(mapping_path, 'w') as f:
-                json.dump(column_mapping, f, indent=2)
-            print(f"Column mapping saved to: {mapping_path}")
-        except Exception as e:
-            print(f"ERROR in column analysis: {str(e)}")
-            return jsonify({'error': f'Column analysis failed: {str(e)}'}), 500
-        
-        # Step 2: Clean Data
-        print("Step 2: Cleaning data...")
-        cleaned_df = clean_data_pipeline(df, column_mapping)
-        cleaned_path = os.path.join(DATA_DIR, 'uploaded_cleaned.csv')
-        cleaned_df.to_csv(cleaned_path, index=False)
-        
-        # Step 3: Generate ML Predictions
-        print("Step 3: Generating predictions...")
-        predictions_df = generate_ml_predictions(cleaned_df)
-        # Save predictions to outputs directory so they are downloadable via /outputs
-        predictions_path = os.path.join(OUTPUTS_DIR, 'predictions.csv')
-        predictions_df.to_csv(predictions_path, index=False)
-        
-        # Step 4: Extract Keywords
-        print("Step 4: Extracting keywords...")
-        positive_keywords, negative_keywords = extract_keywords_from_df(predictions_df)
-        
-        # Save keywords
-        pos_path = os.path.join(OUTPUTS_DIR, 'positive_keywords.csv')
-        neg_path = os.path.join(OUTPUTS_DIR, 'negative_keywords.csv')
-        positive_keywords.to_csv(pos_path, index=False)
-        negative_keywords.to_csv(neg_path, index=False)
-        
-        # Step 5: Aspect Sentiment Analysis
-        print("Step 5: Analyzing aspect sentiment...")
-        aspect_summary = analyze_aspects(predictions_df)
-        
-        aspect_summary_path = os.path.join(OUTPUTS_DIR, 'aspect_sentiment_summary.csv')
-        aspect_summary.to_csv(aspect_summary_path, index=False)
-        
-        # Step 6: Component Failure Analysis
-        print("Step 6: Analyzing component failures...")
-        failure_components = analyze_component_failures(predictions_df)
-        
-        failure_path = os.path.join(OUTPUTS_DIR, 'failure_components_analysis.csv')
-        failure_components.to_csv(failure_path, index=False)
-        
-        # Step 7: Top Products Breakdown
-        print("Step 7: Analyzing top products...")
-        top_products = analyze_top_products(predictions_df)
-        
-        products_path = os.path.join(OUTPUTS_DIR, 'top_products_sentiment_breakdown.csv')
-        top_products.to_csv(products_path, index=False)
-        
-        # Return results with correct structure
-        sentiment_counts = predictions_df['sentiment'].value_counts().to_dict()
-        return jsonify({
-            'status': 'success',
-            'message': 'Analysis completed successfully',
-            'summary': {
-                'total_reviews': len(df),
-                'sentiment_summary': {
-                    'positive': sentiment_counts.get('Positive', 0),
-                    'negative': sentiment_counts.get('Negative', 0),
-                    'neutral': sentiment_counts.get('Neutral', 0)
+            # Step 2: Clean Data
+            print("Step 2: Cleaning data...")
+            cleaned_df = clean_data_pipeline(df, column_mapping)
+            cleaned_path = os.path.join(DATA_DIR, 'uploaded_cleaned.csv')
+            cleaned_df.to_csv(cleaned_path, index=False)
+            
+            # Step 3: Generate ML Predictions
+            print("Step 3: Generating predictions...")
+            predictions_df = generate_ml_predictions(cleaned_df)
+            # Save predictions to outputs directory so they are downloadable via /outputs
+            predictions_path = os.path.join(OUTPUTS_DIR, 'predictions.csv')
+            predictions_df.to_csv(predictions_path, index=False)
+            
+            # Step 4: Extract Keywords
+            print("Step 4: Extracting keywords...")
+            positive_keywords, negative_keywords = extract_keywords_from_df(predictions_df)
+            
+            # Save keywords
+            pos_path = os.path.join(OUTPUTS_DIR, 'positive_keywords.csv')
+            neg_path = os.path.join(OUTPUTS_DIR, 'negative_keywords.csv')
+            positive_keywords.to_csv(pos_path, index=False)
+            negative_keywords.to_csv(neg_path, index=False)
+            
+            # Step 5: Aspect Sentiment Analysis
+            print("Step 5: Analyzing aspect sentiment...")
+            aspect_summary = analyze_aspects(predictions_df)
+            
+            aspect_summary_path = os.path.join(OUTPUTS_DIR, 'aspect_sentiment_summary.csv')
+            aspect_summary.to_csv(aspect_summary_path, index=False)
+            
+            # Step 6: Component Failure Analysis
+            print("Step 6: Analyzing component failures...")
+            failure_components = analyze_component_failures(predictions_df)
+            
+            failure_path = os.path.join(OUTPUTS_DIR, 'failure_components_analysis.csv')
+            failure_components.to_csv(failure_path, index=False)
+            
+            # Step 7: Top Products Breakdown
+            print("Step 7: Analyzing top products...")
+            top_products = analyze_top_products(predictions_df)
+            
+            products_path = os.path.join(OUTPUTS_DIR, 'top_products_sentiment_breakdown.csv')
+            top_products.to_csv(products_path, index=False)
+            
+            # Return results with correct structure
+            sentiment_counts = predictions_df['sentiment'].value_counts().to_dict()
+            return jsonify({
+                'status': 'success',
+                'message': 'Analysis completed successfully',
+                'summary': {
+                    'total_reviews': len(df),
+                    'sentiment_summary': {
+                        'positive': sentiment_counts.get('Positive', 0),
+                        'negative': sentiment_counts.get('Negative', 0),
+                        'neutral': sentiment_counts.get('Neutral', 0)
+                    }
+                },
+                'data': {
+                    'positive_keywords': positive_keywords.to_dict('records') if not positive_keywords.empty else [],
+                    'negative_keywords': negative_keywords.to_dict('records') if not negative_keywords.empty else [],
+                    'aspect_sentiment': aspect_summary.to_dict('records') if not aspect_summary.empty else [],
+                    'failure_components': failure_components.to_dict('records') if not failure_components.empty else [],
+                    'top_products': top_products.to_dict('records') if not top_products.empty else []
+                },
+                'output_files': {
+                    'predictions': 'predictions.csv',
+                    'positive_keywords': 'positive_keywords.csv',
+                    'negative_keywords': 'negative_keywords.csv',
+                    'aspect_sentiment_summary': 'aspect_sentiment_summary.csv',
+                    'failure_components': 'failure_components_analysis.csv',
+                    'top_products': 'top_products_sentiment_breakdown.csv'
                 }
-            },
-            'data': {
-                'positive_keywords': positive_keywords.to_dict('records') if not positive_keywords.empty else [],
-                'negative_keywords': negative_keywords.to_dict('records') if not negative_keywords.empty else [],
-                'aspect_sentiment': aspect_summary.to_dict('records') if not aspect_summary.empty else [],
-                'failure_components': failure_components.to_dict('records') if not failure_components.empty else [],
-                'top_products': top_products.to_dict('records') if not top_products.empty else []
-            },
-            'output_files': {
-                'predictions': 'predictions.csv',
-                'positive_keywords': 'positive_keywords.csv',
-                'negative_keywords': 'negative_keywords.csv',
-                'aspect_sentiment_summary': 'aspect_sentiment_summary.csv',
-                'failure_components': 'failure_components_analysis.csv',
-                'top_products': 'top_products_sentiment_breakdown.csv'
-            }
-        })
-            
+            })
+                
         finally:
             signal.alarm(0)  # Cancel timeout alarm
             
