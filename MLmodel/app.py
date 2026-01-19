@@ -270,7 +270,7 @@ def analyze():
             return jsonify({'error': f'Failed to save file: {str(e)}'}), 500
         
         # Read CSV with encoding auto-detection
-        encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'utf-16']
+        encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']  # Removed utf-16 (causes BOM errors)
         df = None
         last_error = None
         for enc in encodings:
