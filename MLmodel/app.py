@@ -270,7 +270,16 @@ def analyze():
     7. Top products breakdown
     """
     try:
-        # Check if file is uploaded
+        # Timeout protection for entire analyze
+        import signal
+        def timeout_handler(signum, frame):
+            raise TimeoutError("/analyze request exceeded 120 second timeout")
+        
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(120)  # 120 second timeout for entire request
+        
+        try:
+            # Check if file is uploaded
         if 'file' not in request.files:
             return jsonify({'error': 'No file uploaded'}), 400
         
@@ -303,9 +312,19 @@ def analyze():
             print(f"Columns: {column_names[:5]}...")
             
             try:
-                column_mapping = analyze_columns_with_llm(column_names, first_rows)
-            except Exception as llm_err:
-                print(f"LLM column analysis failed: {llm_err}. Falling back to heuristic mapping.")
+                # Add timeout to prevent LLM hanging indefinitely
+                import signal
+                def timeout_handler(signum, frame):
+                    raise TimeoutError("LLM analysis timeout after 30s")
+                
+                signal.signal(signal.SIGALRM, timeout_handler)
+                signal.alarm(30)  # 30 second timeout
+                try:
+                    column_mapping = analyze_columns_with_llm(column_names, first_rows)
+                finally:
+                    signal.alarm(0)  # Cancel alarm
+            except (Exception, TimeoutError) as llm_err:
+                print(f"LLM column analysis failed ({type(llm_err).__name__}): {str(llm_err)[:100]}. Falling back to heuristic mapping.")
                 column_mapping = _heuristic_column_mapping(column_names)
             print(f"Column mapping received: {list(column_mapping.keys())}")
             
@@ -391,7 +410,13 @@ def analyze():
                 'top_products': 'top_products_sentiment_breakdown.csv'
             }
         })
-        
+            
+        finally:
+            signal.alarm(0)  # Cancel timeout alarm
+            
+    except TimeoutError as te:
+        print(f"TIMEOUT in /analyze: {str(te)}")
+        return jsonify({'error': f'Analysis timeout: {str(te)}'}), 504
     except Exception as e:
         error_msg = str(e)
         error_type = type(e).__name__
