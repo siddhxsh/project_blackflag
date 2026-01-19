@@ -21,3 +21,4 @@ six==1.17.0
 threadpoolctl==3.6.0
 tzdata==2025.3
 requests==2.31.0
+nltk==3.9.1

@@ -9,12 +9,23 @@ from io import StringIO
 import sys
 from collections import Counter
 import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from nltk.sentiment import SentimentIntensityAnalyzer
+import requests
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from column_analyzer import analyze_columns_with_llm
-from compare_models import get_comparison_dict
+
+# Download VADER lexicon if needed
+try:
+    import nltk
+    nltk.data.find('sentiment/vader_lexicon')
+except LookupError:
+    import nltk
+    nltk.download('vader_lexicon')
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for Vercel frontend
@@ -222,23 +233,6 @@ def home():
 def health():
     return jsonify({'status': 'healthy'})
 
-@app.route('/compare', methods=['GET'])
-def compare_models():
-    """Compare VADER baseline with ML model"""
-    try:
-        comparison_results = get_comparison_dict()
-        return jsonify({
-            'status': 'success',
-            'data': comparison_results
-        })
-    except Exception as e:
-        print(f"Error comparing models: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({
-            'error': str(e),
-            'type': type(e).__name__
-        }), 500
 
 @app.route('/outputs/<path:filename>', methods=['GET'])
 def download_output(filename: str):
@@ -359,6 +353,276 @@ def analyze():
             'error': str(e),
             'type': type(e).__name__
         }), 500
+
+# ==========================================
+# MODEL COMPARISON ENDPOINT
+# ==========================================
+@app.route('/compare', methods=['GET', 'POST'])
+def compare_models():
+    """
+    Compare VADER vs TF-IDF + Logistic Regression models
+    Returns accuracy metrics and LLM-formatted analysis
+    """
+    try:
+        # Load comparison data from outputs if it exists
+        metrics_file = os.path.join(OUTPUTS_DIR, 'model_comparison_metrics.json')
+        report_file = os.path.join(OUTPUTS_DIR, 'model_comparison_report.txt')
+        
+        if not os.path.exists(metrics_file):
+            # Run evaluation if not cached
+            return run_model_comparison()
+        
+        # Load cached results
+        with open(metrics_file, 'r') as f:
+            metrics = json.load(f)
+        
+        report = ""
+        if os.path.exists(report_file):
+            with open(report_file, 'r') as f:
+                report = f.read()
+        
+        return jsonify({
+            'status': 'success',
+            'metrics': metrics,
+            'report': report,
+            'cached': True
+        })
+    
+    except Exception as e:
+        print(f"Error in compare_models: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'error': str(e),
+            'type': type(e).__name__
+        }), 500
+
+def run_model_comparison():
+    """Run VADER vs Logistic Regression comparison"""
+    try:
+        # Load cleaned data
+        csv_files = [f for f in os.listdir(DATA_DIR) if 'cleaned' in f.lower() and f.endswith('.csv')]
+        if not csv_files:
+            csv_files = [f for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
+        
+        if not csv_files:
+            return jsonify({'error': 'No data files found'}), 400
+        
+        data_path = os.path.join(DATA_DIR, csv_files[0])
+        df = pd.read_csv(data_path, encoding='latin-1')
+        
+        # Prepare data
+        TEXT_COLUMN = "text"
+        LABEL_COLUMN = "sentiment"
+        
+        df[TEXT_COLUMN] = df[TEXT_COLUMN].fillna("").astype(str)
+        
+        # Map sentiment labels
+        sentiment_map = {"positive": 1, "negative": 0, "neutral": 2}
+        if LABEL_COLUMN in df.columns:
+            df['sentiment_numeric'] = df[LABEL_COLUMN].map(lambda x: sentiment_map.get(str(x).lower(), -1))
+        else:
+            return jsonify({'error': f'{LABEL_COLUMN} column not found'}), 400
+        
+        X = df[TEXT_COLUMN]
+        y = df['sentiment_numeric']
+        
+        # Split data
+        class_counts = y.value_counts()
+        stratify = None
+        if (class_counts >= 2).all():
+            stratify = y
+        
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=stratify
+        )
+        
+        # Evaluate VADER
+        sia = SentimentIntensityAnalyzer()
+        vader_predictions = []
+        
+        for text in X_test:
+            scores = sia.polarity_scores(text)
+            compound = scores['compound']
+            
+            if compound >= 0.05:
+                label = sentiment_map['positive']
+            elif compound <= -0.05:
+                label = sentiment_map['negative']
+            else:
+                label = sentiment_map['neutral']
+            
+            vader_predictions.append(label)
+        
+        vader_predictions = np.array(vader_predictions)
+        
+        vader_metrics = {
+            'accuracy': float(accuracy_score(y_test, vader_predictions)),
+            'precision': float(precision_score(y_test, vader_predictions, average='weighted', zero_division=0)),
+            'recall': float(recall_score(y_test, vader_predictions, average='weighted', zero_division=0)),
+            'f1': float(f1_score(y_test, vader_predictions, average='weighted', zero_division=0))
+        }
+        
+        # Evaluate Logistic Regression
+        try:
+            tfidf = joblib.load(os.path.join(MODELS_DIR, "tfidf_vectorizer.joblib"))
+            model = joblib.load(os.path.join(MODELS_DIR, "logistic_model.joblib"))
+            
+            X_test_tfidf = tfidf.transform(X_test)
+            lr_predictions = model.predict(X_test_tfidf)
+            
+            # Convert string predictions to numeric if necessary
+            if isinstance(lr_predictions[0], str):
+                lr_predictions_numeric = np.array([sentiment_map.get(str(p).lower(), -1) for p in lr_predictions])
+            else:
+                lr_predictions_numeric = lr_predictions
+            
+            lr_metrics = {
+                'accuracy': float(accuracy_score(y_test, lr_predictions_numeric)),
+                'precision': float(precision_score(y_test, lr_predictions_numeric, average='weighted', zero_division=0)),
+                'recall': float(recall_score(y_test, lr_predictions_numeric, average='weighted', zero_division=0)),
+                'f1': float(f1_score(y_test, lr_predictions_numeric, average='weighted', zero_division=0))
+            }
+        except FileNotFoundError:
+            return jsonify({'error': 'Model files not found'}), 400
+        
+        # Calculate agreement
+        agreement = (vader_predictions == lr_predictions_numeric).sum() / len(y_test) * 100
+        
+        comparison = {
+            'vader': vader_metrics,
+            'logistic_regression': lr_metrics,
+            'comparison': {
+                'agreement_percent': float(agreement),
+                'test_size': int(len(y_test))
+            }
+        }
+        
+        # Generate report
+        report = generate_comparison_report(vader_metrics, lr_metrics, agreement, len(y_test))
+        
+        # Save results
+        metrics_file = os.path.join(OUTPUTS_DIR, 'model_comparison_metrics.json')
+        with open(metrics_file, 'w') as f:
+            json.dump(comparison, f, indent=2)
+        
+        report_file = os.path.join(OUTPUTS_DIR, 'model_comparison_report.txt')
+        with open(report_file, 'w') as f:
+            f.write(report)
+        
+        return jsonify({
+            'status': 'success',
+            'metrics': comparison,
+            'report': report,
+            'cached': False
+        })
+    
+    except Exception as e:
+        print(f"Error in run_model_comparison: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+def generate_comparison_report(vader_metrics, lr_metrics, agreement, test_size):
+    """Generate comparison report using LLM or default template"""
+    
+    prompt = f"""
+Based on the following model comparison results, generate a comprehensive analysis report:
+
+VADER Sentiment Analysis Performance:
+- Accuracy: {vader_metrics['accuracy']:.4f}
+- Precision: {vader_metrics['precision']:.4f}
+- Recall: {vader_metrics['recall']:.4f}
+- F1 Score: {vader_metrics['f1']:.4f}
+
+TF-IDF + Logistic Regression Performance:
+- Accuracy: {lr_metrics['accuracy']:.4f}
+- Precision: {lr_metrics['precision']:.4f}
+- Recall: {lr_metrics['recall']:.4f}
+- F1 Score: {lr_metrics['f1']:.4f}
+
+Model Agreement Rate: {agreement:.2f}%
+Test Set Size: {test_size} samples
+
+Please provide:
+1. Key findings and model performance comparison
+2. Strengths and weaknesses of each approach
+3. Recommendations for which model to use in production
+4. Suggestions for improvement
+
+Format as a clear, professional report.
+"""
+    
+    # Try OpenRouter
+    openrouter_keys = [
+        os.getenv('OPENROUTER_KEY_1'),
+        os.getenv('OPENROUTER_KEY_2')
+    ]
+    
+    for key in openrouter_keys:
+        if not key:
+            continue
+        
+        try:
+            response = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "HTTP-Referer": "http://localhost",
+                    "X-Title": "Project BlackFlag"
+                },
+                json={
+                    "model": "openai/gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": 0.7,
+                    "max_tokens": 1500
+                },
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                return response.json()['choices'][0]['message']['content']
+        except Exception as e:
+            print(f"OpenRouter error: {e}")
+    
+    # Fallback to default report
+    return f"""
+SENTIMENT ANALYSIS MODEL COMPARISON REPORT
+{'='*60}
+
+EXECUTIVE SUMMARY
+{'-'*60}
+This analysis compares two sentiment analysis approaches:
+1. VADER (Valence Aware Dictionary and sEntiment Reasoner)
+2. TF-IDF + Logistic Regression
+
+PERFORMANCE METRICS
+{'-'*60}
+
+VADER Sentiment Analysis:
+  Accuracy:  {vader_metrics['accuracy']:.4f} ({vader_metrics['accuracy']*100:.2f}%)
+  Precision: {vader_metrics['precision']:.4f}
+  Recall:    {vader_metrics['recall']:.4f}
+  F1 Score:  {vader_metrics['f1']:.4f}
+
+TF-IDF + Logistic Regression:
+  Accuracy:  {lr_metrics['accuracy']:.4f} ({lr_metrics['accuracy']*100:.2f}%)
+  Precision: {lr_metrics['precision']:.4f}
+  Recall:    {lr_metrics['recall']:.4f}
+  F1 Score:  {lr_metrics['f1']:.4f}
+
+MODEL COMPARISON
+{'-'*60}
+Agreement Rate: {agreement:.2f}%
+Test Set Size: {test_size} samples
+
+WINNER: {'TF-IDF + Logistic Regression' if lr_metrics['accuracy'] > vader_metrics['accuracy'] else 'VADER' if vader_metrics['accuracy'] > lr_metrics['accuracy'] else 'TIE'}
+Accuracy Difference: {abs(lr_metrics['accuracy'] - vader_metrics['accuracy']):.4f}
+
+RECOMMENDATIONS
+{'-'*60}
+Use {'TF-IDF + Logistic Regression' if lr_metrics['accuracy'] > vader_metrics['accuracy'] else 'VADER'} for production deployment based on accuracy metrics.
+"""
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
