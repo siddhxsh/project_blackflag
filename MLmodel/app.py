@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 import os
 import json
@@ -14,6 +14,7 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from column_analyzer import analyze_columns_with_llm
+from compare_models import get_comparison_dict
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for Vercel frontend
@@ -212,6 +213,7 @@ def home():
         'message': 'E-commerce Sentiment Analysis API',
         'endpoints': {
             '/analyze': 'POST - Full ML pipeline analysis',
+            '/outputs/<filename>': 'GET - Download generated CSV outputs',
             '/health': 'GET - Health check'
         }
     })
@@ -219,6 +221,29 @@ def home():
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'healthy'})
+
+@app.route('/compare', methods=['GET'])
+def compare_models():
+    """Compare VADER baseline with ML model"""
+    try:
+        comparison_results = get_comparison_dict()
+        return jsonify({
+            'status': 'success',
+            'data': comparison_results
+        })
+    except Exception as e:
+        print(f"Error comparing models: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'error': str(e),
+            'type': type(e).__name__
+        }), 500
+
+@app.route('/outputs/<path:filename>', methods=['GET'])
+def download_output(filename: str):
+    """Serve generated CSV outputs so the frontend can fetch them."""
+    return send_from_directory(OUTPUTS_DIR, filename, as_attachment=False)
 
 @app.route('/analyze', methods=['POST'])
 def analyze():
