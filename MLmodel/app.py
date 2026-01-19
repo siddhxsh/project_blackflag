@@ -31,13 +31,21 @@ from aspect_sentiment_rules import process_aspects, build_summary, ASPECT_KEYWOR
 from component_failure_analysis import analyze_product_failures
 from top_products_breakdown import get_product_keywords
 
-# Download VADER lexicon if needed
+# Download NLTK data if needed
 try:
     import nltk
     nltk.data.find('sentiment/vader_lexicon')
 except LookupError:
     import nltk
     nltk.download('vader_lexicon')
+
+# Download punkt_tab tokenizer if needed (used in aspect sentiment analysis)
+try:
+    import nltk
+    nltk.data.find('tokenizers/punkt_tab')
+except LookupError:
+    import nltk
+    nltk.download('punkt_tab')
 
 app = Flask(__name__)
 CORS(app)  # Enable CORS for Vercel frontend
