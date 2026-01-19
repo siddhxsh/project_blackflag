@@ -269,32 +269,13 @@ def analyze():
             print(f"ERROR saving file: {str(e)}")
             return jsonify({'error': f'Failed to save file: {str(e)}'}), 500
         
-        # Read CSV with encoding auto-detection
-        encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']  # Removed utf-16 (causes BOM errors)
-        df = None
-        last_error = None
-        for enc in encodings:
-            try:
-                df = pd.read_csv(input_path, encoding=enc)
-                print(f"Successfully read CSV with encoding: {enc}")
-                break
-            except (UnicodeDecodeError, UnicodeError) as e:
-                last_error = str(e)
-                print(f"Failed with {enc}: {str(e)}")
-                continue
-            except Exception as e:
-                last_error = str(e)
-                print(f"Unexpected error with {enc}: {str(e)}")
-                continue
-        
-        if df is None:
-            # Last resort: read with error handling
-            try:
-                df = pd.read_csv(input_path, encoding='utf-8', errors='replace')
-                print("Used fallback encoding with error replacement")
-            except Exception as e:
-                print(f"ERROR: All encoding attempts failed. Last error: {last_error}")
-                return jsonify({'error': f'Failed to read CSV: {last_error}'}), 500
+        # Read CSV with UTF-8 and replace invalid bytes
+        try:
+            df = pd.read_csv(input_path, encoding='utf-8', errors='replace')
+            print(f"Successfully read CSV with encoding: utf-8 (errors='replace')")
+        except Exception as e:
+            print(f"ERROR reading CSV: {str(e)}")
+            return jsonify({'error': f'Failed to read CSV: {str(e)}'}), 500
         
         # Step 1: Column Analysis
         print("Step 1: Analyzing columns...")
@@ -449,18 +430,9 @@ def run_model_comparison():
         
         data_path = os.path.join(DATA_DIR, csv_files[0])
         
-        # Read CSV with encoding auto-detection
-        encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
-        df = None
-        for enc in encodings:
-            try:
-                df = pd.read_csv(data_path, encoding=enc)
-                break
-            except (UnicodeDecodeError, UnicodeError):
-                continue
-        
-        if df is None:
-            df = pd.read_csv(data_path, encoding='utf-8', errors='replace')
+        # Read CSV with UTF-8 and replace invalid bytes
+        df = pd.read_csv(data_path, encoding='utf-8', errors='replace')
+        print(f"Read comparison data with utf-8 (errors='replace')")
         
         # Prepare data
         TEXT_COLUMN = "text"
