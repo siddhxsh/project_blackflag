@@ -14,11 +14,21 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from nltk.sentiment import SentimentIntensityAnalyzer
 import requests
 import platform
+from dotenv import load_dotenv
+
+# Load environment variables from .env (local development)
+load_dotenv(override=True)
+print(f"Env loaded: LLM_MODEL={os.getenv('LLM_MODEL')}, OPENROUTER_API_KEY set={bool(os.getenv('OPENROUTER_API_KEY'))}")
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from column_analyzer import analyze_columns_with_llm
+from generate_predictions import generate_predictions
+from keyword_drivers import compute_mean_tfidf, top_keywords
+from aspect_sentiment_rules import process_aspects, build_summary, ASPECT_KEYWORDS
+from component_failure_analysis import analyze_product_failures
+from top_products_breakdown import get_product_keywords
 
 # Download VADER lexicon if needed
 try:
@@ -50,6 +60,20 @@ def clean_data_pipeline(df, column_mapping):
     
     # Rename columns
     df = df.rename(columns=col_map)
+
+    # Collapse any duplicated columns (e.g., Review coming from both Review and text)
+    if df.columns.duplicated().any():
+        for name in df.columns[df.columns.duplicated()].unique():
+            dup_cols = df.loc[:, name]
+            # If selecting by label returns a Series, skip
+            if isinstance(dup_cols, pd.Series):
+                continue
+            merged = dup_cols.apply(
+                lambda row: next((x for x in row if pd.notna(x) and str(x).strip() != ''), ''),
+                axis=1
+            )
+            df = df.drop(columns=[c for c in dup_cols.columns])
+            df[name] = merged
     
     # Keep only required columns
     required_cols = ["ProductName", "Price", "Rate", "Review", "Summary"]
@@ -119,103 +143,114 @@ def generate_ml_predictions(df):
     if os.path.exists(model_path) and os.path.exists(vectorizer_path):
         model = joblib.load(model_path)
         vectorizer = joblib.load(vectorizer_path)
-        
         X = vectorizer.transform(df['text'])
         df['predicted_sentiment'] = model.predict(X)
     else:
-        # If no model, use rule-based sentiment
-        df['predicted_sentiment'] = df['sentiment']
-    
+        print("WARNING: Models not found; skipping ML predictions and returning input DF")
+        df['predicted_sentiment'] = df.get('sentiment', 'Neutral')
     return df
 
+# ==========================================
+# WRAPPER FUNCTIONS FOR SRC MODULES
+# ==========================================
 
-def extract_keywords_from_df(df):
-    """Extract positive and negative keywords"""
-    from collections import Counter
-    import re
+def extract_keywords_wrapper():
+    """Extract keywords using src/keyword_drivers.py"""
+    tfidf = joblib.load(os.path.join(MODELS_DIR, 'tfidf_vectorizer.joblib'))
+    predictions_path = os.path.join(OUTPUTS_DIR, 'predictions.csv')
+    df = pd.read_csv(predictions_path)
     
-    positive_texts = df[df['sentiment'] == 'Positive']['text'].tolist()
-    negative_texts = df[df['sentiment'] == 'Negative']['text'].tolist()
+    # Filter by sentiment
+    df = df[df["predicted_sentiment"].isin(["Positive", "Negative"])].copy()
     
-    def get_words(texts):
-        words = []
-        for text in texts:
-            words.extend(re.findall(r'\b\w+\b', text.lower()))
-        return Counter(words)
+    pos_texts = df.loc[df["predicted_sentiment"] == "Positive", "text"].dropna()
+    neg_texts = df.loc[df["predicted_sentiment"] == "Negative", "text"].dropna()
     
-    pos_counter = get_words(positive_texts)
-    neg_counter = get_words(negative_texts)
+    # Extract positive keywords
+    feature_names_pos, scores_pos, means_pos, dfreq_pos, dfreq_pct_pos = compute_mean_tfidf(pos_texts, tfidf)
+    pos_df = top_keywords(feature_names_pos, scores_pos, means_pos, dfreq_pos, dfreq_pct_pos, top_n=20)
     
-    # Filter common words
-    stopwords = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'is', 'was', 'are', 'were', 'this', 'that', 'it', 'as', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should'}
-    
-    pos_counter = {k: v for k, v in pos_counter.items() if k not in stopwords and len(k) > 2}
-    neg_counter = {k: v for k, v in neg_counter.items() if k not in stopwords and len(k) > 2}
-    
-    pos_df = pd.DataFrame([{'keyword': k, 'frequency': v} for k, v in sorted(pos_counter.items(), key=lambda x: x[1], reverse=True)[:50]])
-    neg_df = pd.DataFrame([{'keyword': k, 'frequency': v} for k, v in sorted(neg_counter.items(), key=lambda x: x[1], reverse=True)[:50]])
+    # Extract negative keywords
+    feature_names_neg, scores_neg, means_neg, dfreq_neg, dfreq_pct_neg = compute_mean_tfidf(neg_texts, tfidf)
+    neg_df = top_keywords(feature_names_neg, scores_neg, means_neg, dfreq_neg, dfreq_pct_neg, top_n=20)
     
     return pos_df, neg_df
 
 
-def analyze_aspects(df):
-    """Analyze sentiment by aspect"""
-    aspects = {
-        'Price': ['price', 'cost', 'expensive', 'cheap', 'affordable', 'value', 'money', 'worth'],
-        'Quality': ['quality', 'durable', 'sturdy', 'build', 'material', 'construction', 'made', 'last'],
-        'Delivery': ['delivery', 'shipping', 'arrived', 'package', 'received', 'time', 'fast', 'slow'],
-        'Performance': ['work', 'works', 'performance', 'function', 'speed', 'efficient', 'effective']
-    }
-    
+def analyze_aspects_wrapper():
+    """Analyze aspects using src/aspect_sentiment_rules.py"""
+    predictions_path = os.path.join(OUTPUTS_DIR, 'predictions.csv')
+    df = pd.read_csv(predictions_path)
+    tfidf = joblib.load(os.path.join(MODELS_DIR, 'tfidf_vectorizer.joblib'))
+    model = joblib.load(os.path.join(MODELS_DIR, 'logistic_model.joblib'))
+
+    # Ensure required columns exist
+    if 'text' not in df.columns:
+        return pd.DataFrame(columns=['aspect', 'Positive', 'Neutral', 'Negative', 'Not Mentioned'])
+
+    # Process aspects and build summary
+    enriched_df = process_aspects(df, tfidf, model)
+    summary_df = build_summary(enriched_df)
+
+    return summary_df
+
+
+def analyze_component_failures_wrapper():
+    """Analyze component failures using src/component_failure_analysis.py"""
+    predictions_path = os.path.join(OUTPUTS_DIR, 'predictions.csv')
+    df = pd.read_csv(predictions_path)
+
+    # Align column names expected by src/component_failure_analysis.py
+    df = df.rename(columns={'predicted_sentiment': 'sentiment_pred'})
+
     results = []
-    for aspect, keywords in aspects.items():
-        aspect_df = df[df['text'].str.contains('|'.join(keywords), case=False, na=False)]
-        if len(aspect_df) > 0:
-            sentiment_counts = aspect_df['sentiment'].value_counts()
-            total = len(aspect_df)
-            results.append({
-                'aspect': aspect,
-                'positive': sentiment_counts.get('Positive', 0),
-                'negative': sentiment_counts.get('Negative', 0),
-                'neutral': sentiment_counts.get('Neutral', 0),
-                'total_mentions': total
-            })
-    
+    if 'ProductName' in df.columns:
+        for product in df['ProductName'].unique():
+            failures = analyze_product_failures(product, df)
+            if failures:
+                results.append({
+                    'product': product,
+                    'components': ', '.join(failures)
+                })
+
+    if not results:
+        return pd.DataFrame(columns=['product', 'components'])
+
     return pd.DataFrame(results)
 
 
-def analyze_component_failures(df):
-    """Extract component failures from negative reviews"""
-    negative_df = df[df['sentiment'] == 'Negative']
-    
-    components = ['cable', 'connector', 'wire', 'plug', 'adapter', 'charger', 'port', 'cord', 'usb']
-    failure_words = ['broke', 'broken', 'failed', 'stop', 'stopped', 'not work', 'doesnt work', 'issue', 'problem']
-    
-    results = []
-    for component in components:
-        comp_df = negative_df[negative_df['text'].str.contains(component, case=False, na=False)]
-        failure_count = comp_df[comp_df['text'].str.contains('|'.join(failure_words), case=False, na=False)]
-        
-        if len(failure_count) > 0:
-            results.append({
-                'component': component,
-                'failure_mentions': len(failure_count),
-                'percentage': round(len(failure_count) / len(negative_df) * 100, 2) if len(negative_df) > 0 else 0
-            })
-    
-    return pd.DataFrame(results).sort_values('failure_mentions', ascending=False)
+def analyze_top_products_wrapper():
+    """Analyze top products using src/top_products_breakdown.py"""
+    predictions_path = os.path.join(OUTPUTS_DIR, 'predictions.csv')
+    df = pd.read_csv(predictions_path)
+    tfidf = joblib.load(os.path.join(MODELS_DIR, 'tfidf_vectorizer.joblib'))
 
-
-def analyze_top_products(df):
-    """Analyze sentiment breakdown by product"""
+    # Align column names expected by src/top_products_breakdown.py
+    df = df.rename(columns={'predicted_sentiment': 'sentiment_pred'})
+    
     if 'ProductName' not in df.columns or df['ProductName'].isna().all():
         return pd.DataFrame()
     
-    product_sentiment = df.groupby(['ProductName', 'sentiment']).size().unstack(fill_value=0)
-    product_sentiment['total'] = product_sentiment.sum(axis=1)
-    product_sentiment = product_sentiment.sort_values('total', ascending=False).head(10)
+    # Get top 10 products by review count
+    top_products = df['ProductName'].value_counts().head(10).index.tolist()
     
-    return product_sentiment.reset_index()
+    results = []
+    for product in top_products:
+        product_df = df[df['ProductName'] == product]
+        keywords = get_product_keywords(product, product_df, tfidf)
+        
+        sentiment_counts = product_df['sentiment_pred'].value_counts()
+        results.append({
+            'ProductName': product,
+            'ReviewCount': len(product_df),
+            'Positive': sentiment_counts.get('Positive', 0),
+            'Negative': sentiment_counts.get('Negative', 0),
+            'Neutral': sentiment_counts.get('Neutral', 0),
+            'TopPositiveKeywords': ', '.join(keywords.get('positive_keywords', [])),
+            'TopNegativeKeywords': ', '.join(keywords.get('negative_keywords', []))
+        })
+    
+    return pd.DataFrame(results)
 
 
 def _heuristic_column_mapping(column_names: list[str]) -> dict:
@@ -301,8 +336,8 @@ def analyze():
             
             # Read CSV with UTF-8 and replace invalid bytes
             try:
-                df = pd.read_csv(input_path, encoding='utf-8', errors='replace')
-                print(f"Successfully read CSV with encoding: utf-8 (errors='replace')")
+                df = pd.read_csv(input_path, encoding='utf-8', encoding_errors='replace')
+                print(f"Successfully read CSV with encoding: utf-8 (encoding_errors='replace')")
             except Exception as e:
                 print(f"ERROR reading CSV: {str(e)}")
                 return jsonify({'error': f'Failed to read CSV: {str(e)}'}), 500
@@ -355,9 +390,9 @@ def analyze():
             predictions_path = os.path.join(OUTPUTS_DIR, 'predictions.csv')
             predictions_df.to_csv(predictions_path, index=False)
             
-            # Step 4: Extract Keywords
+            # Step 4: Extract Keywords (using src/keyword_drivers.py)
             print("Step 4: Extracting keywords...")
-            positive_keywords, negative_keywords = extract_keywords_from_df(predictions_df)
+            positive_keywords, negative_keywords = extract_keywords_wrapper()
             
             # Save keywords
             pos_path = os.path.join(OUTPUTS_DIR, 'positive_keywords.csv')
@@ -365,29 +400,29 @@ def analyze():
             positive_keywords.to_csv(pos_path, index=False)
             negative_keywords.to_csv(neg_path, index=False)
             
-            # Step 5: Aspect Sentiment Analysis
+            # Step 5: Aspect Sentiment Analysis (using src/aspect_sentiment_rules.py)
             print("Step 5: Analyzing aspect sentiment...")
-            aspect_summary = analyze_aspects(predictions_df)
+            aspect_summary = analyze_aspects_wrapper()
             
             aspect_summary_path = os.path.join(OUTPUTS_DIR, 'aspect_sentiment_summary.csv')
             aspect_summary.to_csv(aspect_summary_path, index=False)
             
-            # Step 6: Component Failure Analysis
+            # Step 6: Component Failure Analysis (using src/component_failure_analysis.py)
             print("Step 6: Analyzing component failures...")
-            failure_components = analyze_component_failures(predictions_df)
+            failure_components = analyze_component_failures_wrapper()
             
             failure_path = os.path.join(OUTPUTS_DIR, 'failure_components_analysis.csv')
             failure_components.to_csv(failure_path, index=False)
             
-            # Step 7: Top Products Breakdown
+            # Step 7: Top Products Breakdown (using src/top_products_breakdown.py)
             print("Step 7: Analyzing top products...")
-            top_products = analyze_top_products(predictions_df)
+            top_products = analyze_top_products_wrapper()
             
             products_path = os.path.join(OUTPUTS_DIR, 'top_products_sentiment_breakdown.csv')
             top_products.to_csv(products_path, index=False)
             
             # Return results with correct structure
-            sentiment_counts = predictions_df['sentiment'].value_counts().to_dict()
+            sentiment_counts = predictions_df['predicted_sentiment'].value_counts().to_dict()
             return jsonify({
                 'status': 'success',
                 'message': 'Analysis completed successfully',
@@ -433,6 +468,215 @@ def analyze():
             'error': error_msg,
             'type': error_type,
             'details': 'Check server logs for full traceback'
+        }), 500
+
+# ==========================================
+# LLM FORMULATION ENDPOINT
+# ==========================================
+@app.route('/formulate', methods=['POST'])
+def formulate():
+    """
+    Generate executive summary and key insights from all analysis outputs using LLM.
+    Expects JSON body: {"llm_provider": "gemini" or "openrouter", "model": "optional model name"}
+    """
+    try:
+        data = request.get_json() or {}
+        llm_provider = data.get('llm_provider', 'gemini').lower()
+        model_name = data.get('model')
+        
+        # Load all analysis results
+        predictions_path = os.path.join(OUTPUTS_DIR, 'predictions.csv')
+        aspects_path = os.path.join(OUTPUTS_DIR, 'aspect_sentiment_summary.csv')
+        top_products_path = os.path.join(OUTPUTS_DIR, 'top_products_sentiment_breakdown.csv')
+        failures_path = os.path.join(OUTPUTS_DIR, 'failure_components_analysis.csv')
+        pos_keywords_path = os.path.join(OUTPUTS_DIR, 'positive_keywords.csv')
+        neg_keywords_path = os.path.join(OUTPUTS_DIR, 'negative_keywords.csv')
+        
+        # Check if predictions exist
+        if not os.path.exists(predictions_path):
+            return jsonify({'error': 'No analysis data found. Run /analyze first.'}), 400
+        
+        # Read predictions for overall stats
+        predictions = pd.read_csv(predictions_path)
+        total_reviews = len(predictions)
+        sentiment_counts = predictions['predicted_sentiment'].value_counts().to_dict()
+        
+        # Read aspect sentiment if exists
+        aspects_summary = ""
+        if os.path.exists(aspects_path):
+            aspects_df = pd.read_csv(aspects_path)
+            aspects_summary = aspects_df.to_string(index=False)
+        
+        # Read top products if exists
+        top_products_summary = ""
+        if os.path.exists(top_products_path):
+            top_products_df = pd.read_csv(top_products_path)
+            top_products_summary = top_products_df.head(5).to_string(index=False)
+        
+        # Read failures if exists
+        failures_summary = ""
+        if os.path.exists(failures_path):
+            failures_df = pd.read_csv(failures_path)
+            if not failures_df.empty:
+                failures_summary = failures_df.head(10).to_string(index=False)
+
+        # Read model comparison if available
+        comparison_metrics = ""
+        comparison_report = ""
+        metrics_file = os.path.join(OUTPUTS_DIR, 'model_comparison_metrics.json')
+        report_file = os.path.join(OUTPUTS_DIR, 'model_comparison_report.txt')
+        if os.path.exists(metrics_file):
+            try:
+                with open(metrics_file, 'r') as f:
+                    comparison_metrics = f.read()
+            except Exception:
+                comparison_metrics = ""
+        if os.path.exists(report_file):
+            try:
+                with open(report_file, 'r') as f:
+                    comparison_report = f.read()
+            except Exception:
+                comparison_report = ""
+        
+        # Read keywords
+        pos_keywords_list = []
+        neg_keywords_list = []
+        if os.path.exists(pos_keywords_path):
+            pos_kw_df = pd.read_csv(pos_keywords_path)
+            if 'word' in pos_kw_df.columns:
+                pos_keywords_list = pos_kw_df['word'].head(10).tolist()
+        if os.path.exists(neg_keywords_path):
+            neg_kw_df = pd.read_csv(neg_keywords_path)
+            if 'word' in neg_kw_df.columns:
+                neg_keywords_list = neg_kw_df['word'].head(10).tolist()
+        
+        # Build comprehensive prompt
+        prompt = f"""You are an expert data analyst. Analyze the following e-commerce product review data and provide actionable insights.
+
+**OVERALL STATISTICS:**
+- Total Reviews: {total_reviews:,}
+- Sentiment Distribution:
+  - Positive: {sentiment_counts.get('Positive', 0):,} ({sentiment_counts.get('Positive', 0)/total_reviews*100:.1f}%)
+  - Negative: {sentiment_counts.get('Negative', 0):,} ({sentiment_counts.get('Negative', 0)/total_reviews*100:.1f}%)
+  - Neutral: {sentiment_counts.get('Neutral', 0):,} ({sentiment_counts.get('Neutral', 0)/total_reviews*100:.1f}%)
+
+**TOP POSITIVE KEYWORDS:**
+{', '.join(pos_keywords_list) if pos_keywords_list else 'N/A'}
+
+**TOP NEGATIVE KEYWORDS:**
+{', '.join(neg_keywords_list) if neg_keywords_list else 'N/A'}
+
+**ASPECT SENTIMENT ANALYSIS:**
+{aspects_summary if aspects_summary else 'N/A'}
+
+**TOP PRODUCTS BY REVIEW COUNT:**
+{top_products_summary if top_products_summary else 'N/A'}
+
+**COMPONENT FAILURE ANALYSIS:**
+{failures_summary if failures_summary else 'N/A'}
+
+**MODEL COMPARISON (VADER vs TF-IDF + Logistic Regression):**
+Metrics:
+{comparison_metrics if comparison_metrics else 'N/A'}
+
+Report:
+{comparison_report if comparison_report else 'N/A'}
+
+---
+
+Provide a comprehensive executive summary with:
+
+1. **EXECUTIVE SUMMARY** (2-3 sentences)
+2. **KEY INSIGHTS** (5-7 bullet points highlighting most important findings)
+3. **STRENGTHS** (3-5 bullet points on what customers love)
+4. **AREAS FOR IMPROVEMENT** (3-5 bullet points on critical issues)
+5. **RECOMMENDATIONS** (3-5 actionable steps for business improvement)
+
+Format the response in clean markdown with clear headers and bullet points. Be specific, data-driven, and actionable."""
+        
+        # Call appropriate LLM
+        formatted_response = ""
+        
+        if llm_provider == 'gemini':
+            google_api_key = os.getenv('GOOGLE_API_KEY')
+            if not google_api_key:
+                return jsonify({'error': 'GOOGLE_API_KEY not configured'}), 400
+            
+            model = model_name or 'gemini-2.0-flash-exp'
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={google_api_key}"
+            
+            response = requests.post(
+                url,
+                headers={"Content-Type": "application/json"},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2000}
+                },
+                timeout=60
+            )
+            
+            response.raise_for_status()
+            response_data = response.json()
+            formatted_response = response_data['candidates'][0]['content']['parts'][0]['text']
+        
+        elif llm_provider == 'openrouter':
+            openrouter_keys = [
+                os.getenv('OPENROUTER_API_KEY'),
+                os.getenv('OPENROUTER_KEY_1'),
+                os.getenv('OPENROUTER_KEY_2')
+            ]
+            model = model_name or os.getenv('LLM_MODEL', 'openai/gpt-4o')
+
+            last_error = None
+            for openrouter_key in (k for k in openrouter_keys if k):
+                response = requests.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {openrouter_key}",
+                        "HTTP-Referer": "http://localhost",
+                        "X-Title": "Project BlackFlag"
+                    },
+                    json={
+                        "model": model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.7,
+                        "max_tokens": 2000
+                    },
+                    timeout=60
+                )
+
+                if response.status_code == 200:
+                    formatted_response = response.json()['choices'][0]['message']['content']
+                    break
+
+                last_error = response
+
+            if not formatted_response:
+                if last_error is not None:
+                    last_error.raise_for_status()
+                return jsonify({'error': 'No OpenRouter API keys configured'}), 400
+        
+        else:
+            return jsonify({'error': f'Invalid llm_provider: {llm_provider}. Use "gemini" or "openrouter"'}), 400
+        
+        return jsonify({
+            'status': 'success',
+            'llm_provider': llm_provider,
+            'total_reviews': total_reviews,
+            'sentiment_summary': sentiment_counts,
+            'executive_summary': formatted_response
+        })
+    
+    except requests.exceptions.HTTPError as e:
+        return jsonify({
+            'error': f'{e.response.status_code} {e.response.reason}',
+            'details': str(e),
+            'type': 'HTTPError'
+        }), 500
+    except Exception as e:
+        return jsonify({
+            'error': str(e),
+            'type': type(e).__name__
         }), 500
 
 # ==========================================
@@ -492,7 +736,7 @@ def run_model_comparison():
         data_path = os.path.join(DATA_DIR, csv_files[0])
         
         # Read CSV with UTF-8 and replace invalid bytes
-        df = pd.read_csv(data_path, encoding='utf-8', errors='replace')
+        df = pd.read_csv(data_path, encoding='utf-8', encoding_errors='replace')
         print(f"Read comparison data with utf-8 (errors='replace')")
         
         # Prepare data

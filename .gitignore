@@ -58,6 +58,9 @@ Thumbs.db
 # Data
 MLmodel/data/uploaded*.csv
 MLmodel/data/temp*.csv
+MLmodel/data/*.csv
+column_mapping.json
+outputs/
 
 # Logs
 *.log
