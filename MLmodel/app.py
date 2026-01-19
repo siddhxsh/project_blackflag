@@ -14,17 +14,6 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from nltk.sentiment import SentimentIntensityAnalyzer
 import requests
 import platform
-from pathlib import Path
-
-# Load environment variables from .env file
-try:
-    from dotenv import load_dotenv
-    env_file = os.path.join(os.path.dirname(__file__), '.env')
-    if os.path.exists(env_file):
-        load_dotenv(env_file, override=True)  # Override system env vars
-        print(f"✓ Loaded environment variables from {env_file}")
-except ImportError:
-    print("⚠ python-dotenv not installed. Using system environment variables.")
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
