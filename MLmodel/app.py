@@ -13,6 +13,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from nltk.sentiment import SentimentIntensityAnalyzer
 import requests
+import platform
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
@@ -270,13 +271,15 @@ def analyze():
     7. Top products breakdown
     """
     try:
-        # Timeout protection for entire analyze
-        import signal
-        def timeout_handler(signum, frame):
-            raise TimeoutError("/analyze request exceeded 120 second timeout")
-        
-        signal.signal(signal.SIGALRM, timeout_handler)
-        signal.alarm(120)  # 120 second timeout for entire request
+        # Timeout protection for entire analyze (Linux/Unix only)
+        IS_WINDOWS = platform.system() == 'Windows'
+        if not IS_WINDOWS:
+            import signal
+            def timeout_handler(signum, frame):
+                raise TimeoutError("/analyze request exceeded 120 second timeout")
+            
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(120)  # 120 second timeout for entire request
         
         try:
             # Check if file is uploaded
@@ -312,17 +315,19 @@ def analyze():
                 print(f"Columns: {column_names[:5]}...")
                 
                 try:
-                    # Add timeout to prevent LLM hanging indefinitely
-                    import signal
-                    def timeout_handler(signum, frame):
-                        raise TimeoutError("LLM analysis timeout after 30s")
-                    
-                    signal.signal(signal.SIGALRM, timeout_handler)
-                    signal.alarm(30)  # 30 second timeout
+                    # Add timeout to prevent LLM hanging indefinitely (Linux/Unix only)
+                    if not IS_WINDOWS:
+                        import signal
+                        def timeout_handler(signum, frame):
+                            raise TimeoutError("LLM analysis timeout after 30s")
+                        
+                        signal.signal(signal.SIGALRM, timeout_handler)
+                        signal.alarm(30)  # 30 second timeout
                     try:
                         column_mapping = analyze_columns_with_llm(column_names, first_rows)
                     finally:
-                        signal.alarm(0)  # Cancel alarm
+                        if not IS_WINDOWS:
+                            signal.alarm(0)  # Cancel alarm
                 except (Exception, TimeoutError) as llm_err:
                     print(f"LLM column analysis failed ({type(llm_err).__name__}): {str(llm_err)[:100]}. Falling back to heuristic mapping.")
                     column_mapping = _heuristic_column_mapping(column_names)
@@ -412,7 +417,8 @@ def analyze():
             })
                 
         finally:
-            signal.alarm(0)  # Cancel timeout alarm
+            if not IS_WINDOWS:
+                signal.alarm(0)  # Cancel timeout alarm
             
     except TimeoutError as te:
         print(f"TIMEOUT in /analyze: {str(te)}")
