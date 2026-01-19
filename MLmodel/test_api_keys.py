@@ -59,8 +59,9 @@ def test_openrouter(key_name, api_key):
         "Content-Type": "application/json"
     }
     
+    llm_model = os.getenv("LLM_MODEL", "openai/gpt-5")
     payload = {
-        "model": "xiaomi/mimo-v2-flash:free",
+        "model": llm_model,
         "messages": [{"role": "user", "content": "Say 'API key is valid' if you can read this."}],
         "temperature": 0,
         "max_tokens": 50
@@ -147,8 +148,9 @@ def test_openrouter_backend():
         "Content-Type": "application/json"
     }
     
+    llm_model = os.getenv("LLM_MODEL", "openai/gpt-5")
     payload = {
-        "model": "xiaomi/mimo-v2-flash:free",
+        "model": llm_model,
         "messages": [{"role": "user", "content": "Say 'API key is valid' if you can read this."}],
         "temperature": 0,
         "max_tokens": 50

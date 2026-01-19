@@ -130,8 +130,10 @@ Response:"""
         "Content-Type": "application/json",
     }
     
+    # Choose model via env, default to GPT-5 for backend clients
+    llm_model = os.getenv("LLM_MODEL", "openai/gpt-5")
     payload = {
-        "model": "xiaomi/mimo-v2-flash:free",
+        "model": llm_model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0,
     }

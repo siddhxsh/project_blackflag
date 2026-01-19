@@ -217,6 +217,24 @@ def analyze_top_products(df):
     return product_sentiment.reset_index()
 
 
+def _heuristic_column_mapping(column_names: list[str]) -> dict:
+    """Fallback mapping using simple keyword heuristics when LLM is unavailable."""
+    lowered = {c.lower(): c for c in column_names}
+    def find(*keys):
+        for key in keys:
+            for lc, orig in lowered.items():
+                if key in lc:
+                    return orig
+        return None
+    return {
+        'ProductName': find('productname', 'product_name', 'product title', 'product', 'title', 'name'),
+        'Price': find('price', 'cost', 'amount', 'mrp'),
+        'Rate': find('rating', 'rate', 'stars', 'score'),
+        'Review': find('review', 'comment', 'feedback', 'description', 'text'),
+        'Summary': find('summary', 'headline', 'subject', 'title')
+    }
+
+
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({
@@ -284,7 +302,11 @@ def analyze():
             first_rows = df.head(5).values.tolist()
             print(f"Columns: {column_names[:5]}...")
             
-            column_mapping = analyze_columns_with_llm(column_names, first_rows)
+            try:
+                column_mapping = analyze_columns_with_llm(column_names, first_rows)
+            except Exception as llm_err:
+                print(f"LLM column analysis failed: {llm_err}. Falling back to heuristic mapping.")
+                column_mapping = _heuristic_column_mapping(column_names)
             print(f"Column mapping received: {list(column_mapping.keys())}")
             
             # Save column mapping
@@ -305,7 +327,8 @@ def analyze():
         # Step 3: Generate ML Predictions
         print("Step 3: Generating predictions...")
         predictions_df = generate_ml_predictions(cleaned_df)
-        predictions_path = os.path.join(DATA_DIR, 'predictions.csv')
+        # Save predictions to outputs directory so they are downloadable via /outputs
+        predictions_path = os.path.join(OUTPUTS_DIR, 'predictions.csv')
         predictions_df.to_csv(predictions_path, index=False)
         
         # Step 4: Extract Keywords
@@ -347,9 +370,9 @@ def analyze():
             'summary': {
                 'total_reviews': len(df),
                 'sentiment_summary': {
-                    'positive': sentiment_counts.get('positive', 0),
-                    'negative': sentiment_counts.get('negative', 0),
-                    'neutral': sentiment_counts.get('neutral', 0)
+                    'positive': sentiment_counts.get('Positive', 0),
+                    'negative': sentiment_counts.get('Negative', 0),
+                    'neutral': sentiment_counts.get('Neutral', 0)
                 }
             },
             'data': {
@@ -555,6 +578,8 @@ def run_model_comparison():
 
 def generate_comparison_report(vader_metrics, lr_metrics, agreement, test_size):
     """Generate comparison report using LLM or default template"""
+    # Select LLM model via env, default to GPT-5 for all clients
+    llm_model = os.getenv('LLM_MODEL', 'openai/gpt-5')
     
     prompt = f"""
 Based on the following model comparison results, generate a comprehensive analysis report:
@@ -602,7 +627,7 @@ Format as a clear, professional report.
                     "X-Title": "Project BlackFlag"
                 },
                 json={
-                    "model": "openai/gpt-3.5-turbo",
+                    "model": llm_model,
                     "messages": [{"role": "user", "content": prompt}],
                     "temperature": 0.7,
                     "max_tokens": 1500
