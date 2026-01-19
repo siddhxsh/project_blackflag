@@ -1,0 +1,7 @@
+{
+  "ProductName": "product_name",
+  "Price": "discounted_price",
+  "Rate": "rating",
+  "Review": "review_content",
+  "Summary": "review_title"
+}
