@@ -8,7 +8,12 @@ import pandas as pd
 import joblib
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, classification_report
-from vader_baseline import load_and_prepare_data, get_vader_predictions, evaluate_vader
+
+# Import vader_baseline - works whether called as script or module
+try:
+    from .vader_baseline import load_and_prepare_data, get_vader_predictions, evaluate_vader
+except ImportError:
+    from vader_baseline import load_and_prepare_data, get_vader_predictions, evaluate_vader
 
 # ----------------------------
 # CONFIG
