@@ -262,34 +262,58 @@ def analyze():
         
         # Save uploaded file
         input_path = os.path.join(DATA_DIR, 'uploaded.csv')
-        file.save(input_path)
+        try:
+            file.save(input_path)
+            print(f"File saved successfully to: {input_path}")
+        except Exception as e:
+            print(f"ERROR saving file: {str(e)}")
+            return jsonify({'error': f'Failed to save file: {str(e)}'}), 500
         
         # Read CSV with encoding auto-detection
         encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'utf-16']
         df = None
+        last_error = None
         for enc in encodings:
             try:
                 df = pd.read_csv(input_path, encoding=enc)
                 print(f"Successfully read CSV with encoding: {enc}")
                 break
-            except (UnicodeDecodeError, UnicodeError):
+            except (UnicodeDecodeError, UnicodeError) as e:
+                last_error = str(e)
+                print(f"Failed with {enc}: {str(e)}")
+                continue
+            except Exception as e:
+                last_error = str(e)
+                print(f"Unexpected error with {enc}: {str(e)}")
                 continue
         
         if df is None:
             # Last resort: read with error handling
-            df = pd.read_csv(input_path, encoding='utf-8', errors='replace')
+            try:
+                df = pd.read_csv(input_path, encoding='utf-8', errors='replace')
+                print("Used fallback encoding with error replacement")
+            except Exception as e:
+                print(f"ERROR: All encoding attempts failed. Last error: {last_error}")
+                return jsonify({'error': f'Failed to read CSV: {last_error}'}), 500
         
         # Step 1: Column Analysis
         print("Step 1: Analyzing columns...")
-        column_names = df.columns.tolist()
-        first_rows = df.head(5).values.tolist()
-        
-        column_mapping = analyze_columns_with_llm(column_names, first_rows)
-        
-        # Save column mapping
-        mapping_path = os.path.join(os.path.dirname(BASE_DIR), 'column_mapping.json')
-        with open(mapping_path, 'w') as f:
-            json.dump(column_mapping, f, indent=2)
+        try:
+            column_names = df.columns.tolist()
+            first_rows = df.head(5).values.tolist()
+            print(f"Columns: {column_names[:5]}...")
+            
+            column_mapping = analyze_columns_with_llm(column_names, first_rows)
+            print(f"Column mapping received: {list(column_mapping.keys())}")
+            
+            # Save column mapping
+            mapping_path = os.path.join(os.path.dirname(BASE_DIR), 'column_mapping.json')
+            with open(mapping_path, 'w') as f:
+                json.dump(column_mapping, f, indent=2)
+            print(f"Column mapping saved to: {mapping_path}")
+        except Exception as e:
+            print(f"ERROR in column analysis: {str(e)}")
+            return jsonify({'error': f'Column analysis failed: {str(e)}'}), 500
         
         # Step 2: Clean Data
         print("Step 2: Cleaning data...")
@@ -358,12 +382,15 @@ def analyze():
         })
         
     except Exception as e:
-        print(f"Error: {str(e)}")
+        error_msg = str(e)
+        error_type = type(e).__name__
+        print(f"ERROR in /analyze endpoint: {error_type}: {error_msg}")
         import traceback
         traceback.print_exc()
         return jsonify({
-            'error': str(e),
-            'type': type(e).__name__
+            'error': error_msg,
+            'type': error_type,
+            'details': 'Check server logs for full traceback'
         }), 500
 
 # ==========================================
