@@ -339,15 +339,22 @@ def analyze():
         products_path = os.path.join(OUTPUTS_DIR, 'top_products_sentiment_breakdown.csv')
         top_products.to_csv(products_path, index=False)
         
-        # Return results
+        # Return results with correct structure
+        sentiment_counts = predictions_df['sentiment'].value_counts().to_dict()
         return jsonify({
             'status': 'success',
             'message': 'Analysis completed successfully',
-            'results': {
+            'summary': {
                 'total_reviews': len(df),
-                'sentiment_distribution': predictions_df['sentiment'].value_counts().to_dict(),
-                'positive_keywords': positive_keywords.head(10).to_dict('records') if not positive_keywords.empty else [],
-                'negative_keywords': negative_keywords.head(10).to_dict('records') if not negative_keywords.empty else [],
+                'sentiment_summary': {
+                    'positive': sentiment_counts.get('positive', 0),
+                    'negative': sentiment_counts.get('negative', 0),
+                    'neutral': sentiment_counts.get('neutral', 0)
+                }
+            },
+            'data': {
+                'positive_keywords': positive_keywords.to_dict('records') if not positive_keywords.empty else [],
+                'negative_keywords': negative_keywords.to_dict('records') if not negative_keywords.empty else [],
                 'aspect_sentiment': aspect_summary.to_dict('records') if not aspect_summary.empty else [],
                 'failure_components': failure_components.to_dict('records') if not failure_components.empty else [],
                 'top_products': top_products.to_dict('records') if not top_products.empty else []
