@@ -14,6 +14,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 from nltk.sentiment import SentimentIntensityAnalyzer
 import requests
 import platform
+import threading
 from dotenv import load_dotenv
 
 # Load environment variables from .env (local development)
@@ -308,7 +309,8 @@ def analyze():
     try:
         # Timeout protection for entire analyze (Linux/Unix only)
         IS_WINDOWS = platform.system() == 'Windows'
-        if not IS_WINDOWS:
+        is_main_thread = threading.current_thread() is threading.main_thread()
+        if not IS_WINDOWS and is_main_thread:
             import signal
             def timeout_handler(signum, frame):
                 raise TimeoutError("/analyze request exceeded 120 second timeout")
@@ -351,7 +353,7 @@ def analyze():
                 
                 try:
                     # Add timeout to prevent LLM hanging indefinitely (Linux/Unix only)
-                    if not IS_WINDOWS:
+                    if not IS_WINDOWS and is_main_thread:
                         import signal
                         def timeout_handler(signum, frame):
                             raise TimeoutError("LLM analysis timeout after 30s")
@@ -361,7 +363,7 @@ def analyze():
                     try:
                         column_mapping = analyze_columns_with_llm(column_names, first_rows)
                     finally:
-                        if not IS_WINDOWS:
+                        if not IS_WINDOWS and is_main_thread:
                             signal.alarm(0)  # Cancel alarm
                 except (Exception, TimeoutError) as llm_err:
                     print(f"LLM column analysis failed ({type(llm_err).__name__}): {str(llm_err)[:100]}. Falling back to heuristic mapping.")
@@ -452,7 +454,7 @@ def analyze():
             })
                 
         finally:
-            if not IS_WINDOWS:
+            if not IS_WINDOWS and is_main_thread:
                 signal.alarm(0)  # Cancel timeout alarm
             
     except TimeoutError as te:
