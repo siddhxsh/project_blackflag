@@ -264,8 +264,20 @@ def analyze():
         input_path = os.path.join(DATA_DIR, 'uploaded.csv')
         file.save(input_path)
         
-        # Read CSV to validate
-        df = pd.read_csv(input_path)
+        # Read CSV with encoding auto-detection
+        encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'utf-16']
+        df = None
+        for enc in encodings:
+            try:
+                df = pd.read_csv(input_path, encoding=enc)
+                print(f"Successfully read CSV with encoding: {enc}")
+                break
+            except (UnicodeDecodeError, UnicodeError):
+                continue
+        
+        if df is None:
+            # Last resort: read with error handling
+            df = pd.read_csv(input_path, encoding='utf-8', errors='replace')
         
         # Step 1: Column Analysis
         print("Step 1: Analyzing columns...")
@@ -409,7 +421,19 @@ def run_model_comparison():
             return jsonify({'error': 'No data files found'}), 400
         
         data_path = os.path.join(DATA_DIR, csv_files[0])
-        df = pd.read_csv(data_path, encoding='latin-1')
+        
+        # Read CSV with encoding auto-detection
+        encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
+        df = None
+        for enc in encodings:
+            try:
+                df = pd.read_csv(data_path, encoding=enc)
+                break
+            except (UnicodeDecodeError, UnicodeError):
+                continue
+        
+        if df is None:
+            df = pd.read_csv(data_path, encoding='utf-8', errors='replace')
         
         # Prepare data
         TEXT_COLUMN = "text"
