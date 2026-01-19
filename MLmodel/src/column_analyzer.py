@@ -39,11 +39,11 @@ def extract_json_from_response(response_text: str) -> dict:
     raise ValueError(f"Could not parse any valid JSON from response: {response_text}")
 
 
-def call_openrouter_api(column_names: list[str], first_rows: list, api_key: str) -> dict:
-    """Call OpenRouter API to map column names to required fields."""
+def call_google_gemini_api(column_names: list[str], first_rows: list, api_key: str) -> dict:
+    """Call Google Gemini API to map column names to required fields."""
     
     if not api_key:
-        raise ValueError("OPENROUTER_API_KEY environment variable not set")
+        raise ValueError("GOOGLE_API_KEY environment variable not set")
     
     # Prepare the data summary for the prompt
     csv_summary = f"Column names: {column_names}\n\nFirst 5 rows:\n"
@@ -68,31 +68,31 @@ Example response format (no markdown, no explanation):
 
 Response:"""
 
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}"
+    
     headers = {
-        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
     
     payload = {
-        "model": "openai/gpt-4o-mini",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0,
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }],
+        "generationConfig": {
+            "temperature": 0,
+            "maxOutputTokens": 500
+        }
     }
     
-    response = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers=headers,
-        json=payload,
-        timeout=30
-    )
+    response = requests.post(url, headers=headers, json=payload, timeout=30)
     
     response.raise_for_status()
     response_data = response.json()
     
-    if "choices" not in response_data or len(response_data["choices"]) == 0:
+    if "candidates" not in response_data or len(response_data["candidates"]) == 0:
         raise ValueError(f"Invalid API response: {response_data}")
     
-    content = response_data["choices"][0]["message"]["content"]
+    content = response_data["candidates"][0]["content"]["parts"][0]["text"]
     return extract_json_from_response(content)
 
 
@@ -114,15 +114,16 @@ def analyze_columns_with_llm(column_names: list[str], first_rows: list, api_key:
     """
     Analyze columns using LLM and return mapping.
     Can be imported by other modules.
+    Uses Google Gemini API.
     """
     if api_key is None:
-        api_key = os.getenv("OPENROUTER_API_KEY")
+        api_key = os.getenv("GOOGLE_API_KEY")
     
     if not api_key:
-        raise ValueError("OPENROUTER_API_KEY environment variable is not set")
+        raise ValueError("GOOGLE_API_KEY environment variable is not set")
     
     # Call API
-    mapping = call_openrouter_api(column_names, first_rows, api_key)
+    mapping = call_google_gemini_api(column_names, first_rows, api_key)
     
     # Validate mapping
     mapping = validate_mapping(mapping, column_names)
@@ -142,10 +143,10 @@ def main():
     print(f"Found {len(column_names)} columns")
     
     # Get API key
-    api_key = os.getenv("OPENROUTER_API_KEY")
+    api_key = os.getenv("GOOGLE_API_KEY")
     
     # Call wrapper function
-    print("Calling OpenRouter API for column mapping...")
+    print("Calling Google Gemini API for column mapping...")
     mapping = analyze_columns_with_llm(column_names, first_rows, api_key)
     
     # Print final result
