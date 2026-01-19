@@ -119,8 +119,7 @@ def analyze_columns_with_llm(column_names: list[str], first_rows: list, api_key:
         api_key = os.getenv("OPENROUTER_API_KEY")
     
     if not api_key:
-        # Use hardcoded key for deployment
-        api_key = "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"
+        raise ValueError("OPENROUTER_API_KEY environment variable is not set")
     
     # Call API
     mapping = call_openrouter_api(column_names, first_rows, api_key)
