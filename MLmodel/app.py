@@ -327,7 +327,7 @@ def analyze():
                 raise TimeoutError("/analyze request exceeded 120 second timeout")
             
             signal.signal(signal.SIGALRM, timeout_handler)
-            signal.alarm(120)  # 120 second timeout for entire request
+            signal.alarm(300)  # 300 second (5 min) timeout for entire request
         
         try:
             # Check if file is uploaded
@@ -370,7 +370,7 @@ def analyze():
                             raise TimeoutError("LLM analysis timeout after 30s")
                         
                         signal.signal(signal.SIGALRM, timeout_handler)
-                        signal.alarm(30)  # 30 second timeout
+                        signal.alarm(30)  # 30 second timeout (LLM column analysis only)
                     try:
                         column_mapping = analyze_columns_with_llm(column_names, first_rows)
                     finally:

@@ -4,7 +4,7 @@ services:
     runtime: python
     pythonVersion: 3.11.0
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --bind 0.0.0.0:$PORT src.api:app
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --timeout 300 src.api:app
     envVars:
       - key: LLM_MODEL
         value: xiaomi/mimo-v2-flash:free
