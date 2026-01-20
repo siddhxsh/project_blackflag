@@ -16,6 +16,9 @@ import requests
 import platform
 import threading
 from dotenv import load_dotenv
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 # Load environment variables from .env (local development)
 load_dotenv(override=True)
@@ -26,7 +29,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from column_analyzer import analyze_columns_with_llm
 from generate_predictions import generate_predictions
-from keyword_drivers import compute_mean_tfidf, top_keywords
+from keyword_drivers import compute_mean_tfidf, top_keywords, plot_bar
 from aspect_sentiment_rules import process_aspects, build_summary, ASPECT_KEYWORDS
 from component_failure_analysis import analyze_product_failures
 from top_products_breakdown import get_product_keywords
@@ -409,6 +412,12 @@ def analyze():
             neg_path = os.path.join(OUTPUTS_DIR, 'negative_keywords.csv')
             positive_keywords.to_csv(pos_path, index=False)
             negative_keywords.to_csv(neg_path, index=False)
+            # Generate keyword charts for frontend display
+            try:
+                plot_bar(positive_keywords, "Top Positive Keywords", os.path.join(OUTPUTS_DIR, 'positive_keywords.png'))
+                plot_bar(negative_keywords, "Top Negative Keywords", os.path.join(OUTPUTS_DIR, 'negative_keywords.png'))
+            except Exception as chart_err:
+                print(f"Keyword chart generation failed: {chart_err}")
             
             # Step 5: Aspect Sentiment Analysis (using src/aspect_sentiment_rules.py)
             print("Step 5: Analyzing aspect sentiment...")
@@ -430,6 +439,36 @@ def analyze():
             
             products_path = os.path.join(OUTPUTS_DIR, 'top_products_sentiment_breakdown.csv')
             top_products.to_csv(products_path, index=False)
+            # Generate stacked bar chart for top products sentiment breakdown
+            try:
+                if not top_products.empty:
+                    fig, ax = plt.subplots(figsize=(12, 8))
+                    bottom = [0] * len(top_products)
+                    colors = ["#4CAF50", "#FFC107", "#F44336"]
+                    labels = ["Positive", "Neutral", "Negative"]
+
+                    for i, sentiment in enumerate(["Positive", "Neutral", "Negative"]):
+                        ax.bar(
+                            top_products["ProductName"],
+                            top_products[sentiment],
+                            bottom=bottom,
+                            label=labels[i],
+                            color=colors[i]
+                        )
+                        bottom = [b + v for b, v in zip(bottom, top_products[sentiment])]
+
+                    ax.set_title("Top Reviewed Products — Sentiment Breakdown")
+                    ax.set_ylabel("Number of Reviews")
+                    ax.set_xlabel("Product Name")
+                    ax.legend()
+                    plt.xticks(rotation=45, ha="right")
+                    plt.tight_layout()
+
+                    chart_path = os.path.join(OUTPUTS_DIR, 'top_products_sentiment_breakdown.png')
+                    plt.savefig(chart_path, dpi=150)
+                    plt.close()
+            except Exception as chart_err:
+                print(f"Top products chart generation failed: {chart_err}")
             
             # Return results with correct structure
             sentiment_counts = predictions_df['predicted_sentiment'].value_counts().to_dict()
@@ -699,29 +738,8 @@ def compare_models():
     Returns accuracy metrics and LLM-formatted analysis
     """
     try:
-        # Load comparison data from outputs if it exists
-        metrics_file = os.path.join(OUTPUTS_DIR, 'model_comparison_metrics.json')
-        report_file = os.path.join(OUTPUTS_DIR, 'model_comparison_report.txt')
-        
-        if not os.path.exists(metrics_file):
-            # Run evaluation if not cached
-            return run_model_comparison()
-        
-        # Load cached results
-        with open(metrics_file, 'r') as f:
-            metrics = json.load(f)
-        
-        report = ""
-        if os.path.exists(report_file):
-            with open(report_file, 'r') as f:
-                report = f.read()
-        
-        return jsonify({
-            'status': 'success',
-            'metrics': metrics,
-            'report': report,
-            'cached': True
-        })
+        # Always run fresh comparison to avoid stale cached metrics
+        return run_model_comparison()
     
     except Exception as e:
         print(f"Error in compare_models: {str(e)}")
