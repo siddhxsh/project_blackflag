@@ -692,15 +692,15 @@ Report:
 
 ---
 
-Provide a comprehensive executive summary with:
+Provide a concise, bullet-only executive summary. Keep wording brief.
 
-1. **EXECUTIVE SUMMARY** (2-3 sentences)
-2. **KEY INSIGHTS** (5-7 bullet points highlighting most important findings)
-3. **STRENGTHS** (3-5 bullet points on what customers love)
-4. **AREAS FOR IMPROVEMENT** (3-5 bullet points on critical issues)
-5. **RECOMMENDATIONS** (3-5 actionable steps for business improvement)
+1. **EXECUTIVE SUMMARY** — 2 short bullets
+2. **KEY INSIGHTS** — 5-7 bullets
+3. **STRENGTHS** — 3-5 bullets
+4. **AREAS FOR IMPROVEMENT** — 3-5 bullets
+5. **RECOMMENDATIONS** — 3-5 bullets
 
-Format the response in clean markdown with clear headers and bullet points. Be specific, data-driven, and actionable."""
+Format: Markdown headers + bullets only. No long paragraphs. Be specific and data-driven."""
         
         # Call appropriate LLM
         formatted_response = ""

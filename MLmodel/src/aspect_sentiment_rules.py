@@ -75,7 +75,8 @@ def process_aspects(df: pd.DataFrame, tfidf, model) -> pd.DataFrame:
 
     for _, row in df.iterrows():
         text = str(row.get(TEXT_COLUMN, ""))
-        sentences = sent_tokenize(text)
+        # Cap sentences per review to reduce memory/CPU on small instances
+        sentences = sent_tokenize(text)[:10]
 
         row_aspect_sentiments = {}
         row_aspect_examples = {}
@@ -83,6 +84,8 @@ def process_aspects(df: pd.DataFrame, tfidf, model) -> pd.DataFrame:
         for aspect, keywords in ASPECT_KEYWORDS.items():
             matched_sents = []
             for sent in sentences:
+                if len(matched_sents) >= 5:
+                    break  # limit per-aspect sentences to avoid large vectorization
                 sent_lower = sent.lower()
                 if any(k in sent_lower for k in keywords):
                     matched_sents.append(sent)
