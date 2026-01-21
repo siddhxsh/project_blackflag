@@ -200,10 +200,14 @@ def extract_keywords_wrapper():
     return pos_df, neg_df
 
 
-def analyze_aspects_wrapper():
+def analyze_aspects_wrapper(nrows=None):
     """Analyze aspects using src/aspect_sentiment_rules.py"""
     predictions_path = os.path.join(OUTPUTS_DIR, 'predictions.csv')
     df = pd.read_csv(predictions_path)
+    
+    # Sample if nrows specified
+    if nrows is not None and len(df) > nrows:
+        df = df.sample(n=nrows, random_state=42)
     tfidf = joblib.load(os.path.join(MODELS_DIR, 'tfidf_vectorizer.joblib'))
     model = joblib.load(os.path.join(MODELS_DIR, 'logistic_model.joblib'))
 
@@ -218,10 +222,14 @@ def analyze_aspects_wrapper():
     return summary_df
 
 
-def analyze_component_failures_wrapper():
+def analyze_component_failures_wrapper(nrows=None):
     """Analyze component failures using src/component_failure_analysis.py"""
     predictions_path = os.path.join(OUTPUTS_DIR, 'predictions.csv')
     df = pd.read_csv(predictions_path)
+    
+    # Sample if nrows specified
+    if nrows is not None and len(df) > nrows:
+        df = df.sample(n=nrows, random_state=42)
 
     # Align column names expected by src/component_failure_analysis.py
     df = df.rename(columns={'predicted_sentiment': 'sentiment_pred'})
@@ -485,10 +493,13 @@ def analyze():
             if disable_aspects:
                 print("Step 5 skipped: DISABLE_ASPECTS=1")
             elif processed_rows > aspect_max_rows:
-                print(f"Step 5 skipped: processed_rows {processed_rows} > ASPECT_MAX_ROWS {aspect_max_rows}")
+                print(f"Step 5: Sampling {aspect_max_rows} rows for aspect analysis (total {processed_rows})")
+                aspect_summary = analyze_aspects_wrapper(nrows=aspect_max_rows)
+                aspect_summary_path = os.path.join(OUTPUTS_DIR, 'aspect_sentiment_summary.csv')
+                aspect_summary.to_csv(aspect_summary_path, index=False)
             else:
                 print("Step 5: Analyzing aspect sentiment...")
-                aspect_summary = analyze_aspects_wrapper()
+                aspect_summary = analyze_aspects_wrapper(nrows=None)
                 aspect_summary_path = os.path.join(OUTPUTS_DIR, 'aspect_sentiment_summary.csv')
                 aspect_summary.to_csv(aspect_summary_path, index=False)
 
@@ -497,10 +508,13 @@ def analyze():
             if disable_failures:
                 print("Step 6 skipped: DISABLE_FAILURES=1")
             elif processed_rows > aspect_max_rows:
-                print(f"Step 6 skipped: processed_rows {processed_rows} > ASPECT_MAX_ROWS {aspect_max_rows}")
+                print(f"Step 6: Sampling {aspect_max_rows} rows for failure analysis (total {processed_rows})")
+                failure_components = analyze_component_failures_wrapper(nrows=aspect_max_rows)
+                failure_path = os.path.join(OUTPUTS_DIR, 'failure_components_analysis.csv')
+                failure_components.to_csv(failure_path, index=False)
             else:
                 print("Step 6: Analyzing component failures...")
-                failure_components = analyze_component_failures_wrapper()
+                failure_components = analyze_component_failures_wrapper(nrows=None)
                 failure_path = os.path.join(OUTPUTS_DIR, 'failure_components_analysis.csv')
                 failure_components.to_csv(failure_path, index=False)
             
