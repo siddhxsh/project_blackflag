@@ -820,7 +820,11 @@ def run_model_comparison():
         
         # Read CSV with UTF-8 and replace invalid bytes
         df = pd.read_csv(data_path, encoding='utf-8', encoding_errors='replace')
-        print(f"Read comparison data from {data_path} with utf-8 (errors='replace')")
+        
+        # Log dataset fingerprint to verify it's changing
+        total_rows = len(df)
+        sentiment_dist = df['sentiment'].value_counts().to_dict() if 'sentiment' in df.columns else {}
+        print(f"Comparison data loaded: {total_rows} rows, sentiment dist: {sentiment_dist}")
         
         # Prepare data
         TEXT_COLUMN = "text"
@@ -838,15 +842,20 @@ def run_model_comparison():
         X = df[TEXT_COLUMN]
         y = df['sentiment_numeric']
         
-        # Split data
+        # Split data - use timestamp-based seed so each dataset gets a fair random split
+        import time
+        random_seed = int(time.time()) % 10000  # Use timestamp for varying splits
+        
         class_counts = y.value_counts()
         stratify = None
         if (class_counts >= 2).all():
             stratify = y
         
         X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=stratify
+            X, y, test_size=0.2, random_state=random_seed, stratify=stratify
         )
+        
+        print(f"Train/test split: {len(X_train)} train, {len(X_test)} test (seed={random_seed})")
         
         # Evaluate VADER
         sia = SentimentIntensityAnalyzer()
