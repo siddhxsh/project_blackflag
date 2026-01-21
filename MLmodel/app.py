@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory, make_response
 from flask_cors import CORS
 import os
 import json
@@ -792,12 +792,12 @@ def compare_models():
     """
     try:
         # Always run fresh comparison to avoid stale cached metrics
-        response = run_model_comparison()
-        # Prevent frontend caching
-        if hasattr(response, 'headers'):
-            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
-            response.headers['Pragma'] = 'no-cache'
-            response.headers['Expires'] = '0'
+        result = run_model_comparison()
+        # Prevent frontend caching with proper response headers
+        response = make_response(result)
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
         return response
     
     except Exception as e:
@@ -921,11 +921,13 @@ def run_model_comparison():
         with open(report_file, 'w') as f:
             f.write(report)
         
+        import time
         return jsonify({
             'status': 'success',
             'metrics': comparison,
             'report': report,
-            'cached': False
+            'cached': False,
+            'timestamp': int(time.time())  # Force cache busting
         })
     
     except Exception as e:
