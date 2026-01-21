@@ -168,6 +168,7 @@ def generate_ml_predictions(df):
 
 def extract_keywords_wrapper():
     """Extract keywords using src/keyword_drivers.py"""
+    import gc
     tfidf = joblib.load(os.path.join(MODELS_DIR, 'tfidf_vectorizer.joblib'))
     predictions_path = os.path.join(OUTPUTS_DIR, 'predictions.csv')
     df = pd.read_csv(predictions_path)
@@ -175,8 +176,14 @@ def extract_keywords_wrapper():
     # Filter by sentiment
     df = df[df["predicted_sentiment"].isin(["Positive", "Negative"])].copy()
     
+    # Sample down to limit memory/cpu on 512MB instance
+    MAX_KEYWORD_ROWS = int(os.getenv('KEYWORD_MAX_ROWS', '800'))
     pos_texts = df.loc[df["predicted_sentiment"] == "Positive", "text"].dropna()
     neg_texts = df.loc[df["predicted_sentiment"] == "Negative", "text"].dropna()
+    if len(pos_texts) > MAX_KEYWORD_ROWS:
+        pos_texts = pos_texts.sample(n=MAX_KEYWORD_ROWS, random_state=42)
+    if len(neg_texts) > MAX_KEYWORD_ROWS:
+        neg_texts = neg_texts.sample(n=MAX_KEYWORD_ROWS, random_state=42)
     
     # Safeguard: Check if we have enough data
     MIN_REVIEWS = 5
@@ -184,7 +191,7 @@ def extract_keywords_wrapper():
     # Extract positive keywords if enough data
     if len(pos_texts) >= MIN_REVIEWS:
         feature_names_pos, scores_pos, means_pos, dfreq_pos, dfreq_pct_pos = compute_mean_tfidf(pos_texts, tfidf)
-        pos_df = top_keywords(feature_names_pos, scores_pos, means_pos, dfreq_pos, dfreq_pct_pos, top_n=20)
+        pos_df = top_keywords(feature_names_pos, scores_pos, means_pos, dfreq_pos, dfreq_pct_pos, top_n=10)
     else:
         print(f"WARNING: Only {len(pos_texts)} positive reviews (min {MIN_REVIEWS}), skipping positive keywords")
         pos_df = pd.DataFrame(columns=['word', 'mean_tfidf', 'doc_frequency', 'doc_frequency_pct'])
@@ -192,11 +199,14 @@ def extract_keywords_wrapper():
     # Extract negative keywords if enough data
     if len(neg_texts) >= MIN_REVIEWS:
         feature_names_neg, scores_neg, means_neg, dfreq_neg, dfreq_pct_neg = compute_mean_tfidf(neg_texts, tfidf)
-        neg_df = top_keywords(feature_names_neg, scores_neg, means_neg, dfreq_neg, dfreq_pct_neg, top_n=20)
+        neg_df = top_keywords(feature_names_neg, scores_neg, means_neg, dfreq_neg, dfreq_pct_neg, top_n=10)
     else:
         print(f"WARNING: Only {len(neg_texts)} negative reviews (min {MIN_REVIEWS}), skipping negative keywords")
         neg_df = pd.DataFrame(columns=['word', 'mean_tfidf', 'doc_frequency', 'doc_frequency_pct'])
-    
+
+    del df, pos_texts, neg_texts, tfidf
+    gc.collect()
+
     return pos_df, neg_df
 
 
