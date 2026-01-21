@@ -178,13 +178,24 @@ def extract_keywords_wrapper():
     pos_texts = df.loc[df["predicted_sentiment"] == "Positive", "text"].dropna()
     neg_texts = df.loc[df["predicted_sentiment"] == "Negative", "text"].dropna()
     
-    # Extract positive keywords
-    feature_names_pos, scores_pos, means_pos, dfreq_pos, dfreq_pct_pos = compute_mean_tfidf(pos_texts, tfidf)
-    pos_df = top_keywords(feature_names_pos, scores_pos, means_pos, dfreq_pos, dfreq_pct_pos, top_n=20)
+    # Safeguard: Check if we have enough data
+    MIN_REVIEWS = 5
     
-    # Extract negative keywords
-    feature_names_neg, scores_neg, means_neg, dfreq_neg, dfreq_pct_neg = compute_mean_tfidf(neg_texts, tfidf)
-    neg_df = top_keywords(feature_names_neg, scores_neg, means_neg, dfreq_neg, dfreq_pct_neg, top_n=20)
+    # Extract positive keywords if enough data
+    if len(pos_texts) >= MIN_REVIEWS:
+        feature_names_pos, scores_pos, means_pos, dfreq_pos, dfreq_pct_pos = compute_mean_tfidf(pos_texts, tfidf)
+        pos_df = top_keywords(feature_names_pos, scores_pos, means_pos, dfreq_pos, dfreq_pct_pos, top_n=20)
+    else:
+        print(f"WARNING: Only {len(pos_texts)} positive reviews (min {MIN_REVIEWS}), skipping positive keywords")
+        pos_df = pd.DataFrame(columns=['word', 'mean_tfidf', 'doc_frequency', 'doc_frequency_pct'])
+    
+    # Extract negative keywords if enough data
+    if len(neg_texts) >= MIN_REVIEWS:
+        feature_names_neg, scores_neg, means_neg, dfreq_neg, dfreq_pct_neg = compute_mean_tfidf(neg_texts, tfidf)
+        neg_df = top_keywords(feature_names_neg, scores_neg, means_neg, dfreq_neg, dfreq_pct_neg, top_n=20)
+    else:
+        print(f"WARNING: Only {len(neg_texts)} negative reviews (min {MIN_REVIEWS}), skipping negative keywords")
+        neg_df = pd.DataFrame(columns=['word', 'mean_tfidf', 'doc_frequency', 'doc_frequency_pct'])
     
     return pos_df, neg_df
 
@@ -842,14 +853,24 @@ def run_model_comparison():
         X = df[TEXT_COLUMN]
         y = df['sentiment_numeric']
         
+        # Safeguard: Check minimum samples
+        if len(df) < 20:
+            return jsonify({
+                'error': 'Insufficient data for comparison',
+                'details': f'Need at least 20 reviews, got {len(df)}'
+            }), 400
+        
         # Split data - use timestamp-based seed so each dataset gets a fair random split
         import time
         random_seed = int(time.time()) % 10000  # Use timestamp for varying splits
         
         class_counts = y.value_counts()
         stratify = None
+        # Only stratify if we have at least 2 samples per class
         if (class_counts >= 2).all():
             stratify = y
+                else:
+                    print(f"WARNING: Skipping stratification due to class imbalance: {class_counts.to_dict()}")
         
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.2, random_state=random_seed, stratify=stratify
