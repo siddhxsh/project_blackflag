@@ -202,6 +202,7 @@ def extract_keywords_wrapper():
 
 def analyze_aspects_wrapper(nrows=None):
     """Analyze aspects using src/aspect_sentiment_rules.py"""
+    import gc
     predictions_path = os.path.join(OUTPUTS_DIR, 'predictions.csv')
     df = pd.read_csv(predictions_path)
     
@@ -218,6 +219,8 @@ def analyze_aspects_wrapper(nrows=None):
     # Process aspects and build summary
     enriched_df = process_aspects(df, tfidf, model)
     summary_df = build_summary(enriched_df)
+    del df, tfidf, model, enriched_df  # Free memory on small instances
+    gc.collect()
 
     return summary_df
 
@@ -518,7 +521,7 @@ def analyze():
             aspect_summary = pd.DataFrame()
 
             disable_aspects = os.getenv('DISABLE_ASPECTS', '0') == '1'
-            aspect_max_rows = int(os.getenv('ASPECT_MAX_ROWS', '3000'))
+            aspect_max_rows = int(os.getenv('ASPECT_MAX_ROWS', '1200'))
 
             if disable_aspects:
                 print("Step 5 skipped: DISABLE_ASPECTS=1")
