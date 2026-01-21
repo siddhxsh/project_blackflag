@@ -531,7 +531,7 @@ def analyze():
             aspect_summary = pd.DataFrame()
 
             disable_aspects = os.getenv('DISABLE_ASPECTS', '0') == '1'
-            aspect_max_rows = int(os.getenv('ASPECT_MAX_ROWS', '300'))
+            aspect_max_rows = int(os.getenv('ASPECT_MAX_ROWS', '100'))
 
             if disable_aspects:
                 print("Step 5 skipped: DISABLE_ASPECTS=1")
