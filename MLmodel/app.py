@@ -457,7 +457,7 @@ def analyze():
                 print("WARNING: Models not found; fallback to rating-based sentiment where available")
 
             # Smaller chunks reduce peak memory; configurable via env
-            chunk_size = int(os.getenv('CHUNK_SIZE', '2000'))
+            chunk_size = int(os.getenv('CHUNK_SIZE', '1000'))
             processed_rows = 0
             sentiment_counter = Counter()
             first_clean_header = True
@@ -475,6 +475,7 @@ def analyze():
                 if model is not None and vectorizer is not None and not cleaned_chunk.empty:
                     X = vectorizer.transform(cleaned_chunk['text'])
                     cleaned_chunk['predicted_sentiment'] = model.predict(X)
+                    del X  # Free sparse matrix memory immediately
                 else:
                     # Fallback to existing sentiment column
                     cleaned_chunk['predicted_sentiment'] = cleaned_chunk.get('sentiment', 'Neutral')
@@ -485,6 +486,11 @@ def analyze():
                 # Append predictions chunk
                 cleaned_chunk.to_csv(predictions_path, mode='a', index=False, header=first_pred_header)
                 first_pred_header = False
+                
+                # Explicit cleanup to free memory on constrained instance
+                del cleaned_chunk
+                import gc
+                gc.collect()
             
             print(f"Streaming complete. Processed rows: {processed_rows}")
             
