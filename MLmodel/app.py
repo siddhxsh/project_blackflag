@@ -423,7 +423,8 @@ def analyze():
             else:
                 print("WARNING: Models not found; fallback to rating-based sentiment where available")
 
-            chunk_size = int(os.getenv('CHUNK_SIZE', '5000'))
+            # Smaller chunks reduce peak memory; configurable via env
+            chunk_size = int(os.getenv('CHUNK_SIZE', '2000'))
             processed_rows = 0
             sentiment_counter = Counter()
             first_clean_header = True
@@ -466,26 +467,42 @@ def analyze():
             neg_path = os.path.join(OUTPUTS_DIR, 'negative_keywords.csv')
             positive_keywords.to_csv(pos_path, index=False)
             negative_keywords.to_csv(neg_path, index=False)
-            # Generate keyword charts for frontend display
-            try:
-                plot_bar(positive_keywords, "Top Positive Keywords", os.path.join(OUTPUTS_DIR, 'positive_keywords.png'))
-                plot_bar(negative_keywords, "Top Negative Keywords", os.path.join(OUTPUTS_DIR, 'negative_keywords.png'))
-            except Exception as chart_err:
-                print(f"Keyword chart generation failed: {chart_err}")
+            # Generate keyword charts (optional, can be disabled to save memory/CPU)
+            if os.getenv('SKIP_PLOTS', '1') != '1':
+                try:
+                    plot_bar(positive_keywords, "Top Positive Keywords", os.path.join(OUTPUTS_DIR, 'positive_keywords.png'))
+                    plot_bar(negative_keywords, "Top Negative Keywords", os.path.join(OUTPUTS_DIR, 'negative_keywords.png'))
+                except Exception as chart_err:
+                    print(f"Keyword chart generation failed: {chart_err}")
             
             # Step 5: Aspect Sentiment Analysis (using src/aspect_sentiment_rules.py)
-            print("Step 5: Analyzing aspect sentiment...")
-            aspect_summary = analyze_aspects_wrapper()
-            
-            aspect_summary_path = os.path.join(OUTPUTS_DIR, 'aspect_sentiment_summary.csv')
-            aspect_summary.to_csv(aspect_summary_path, index=False)
-            
+            aspect_summary = pd.DataFrame()
+            failure_components = pd.DataFrame()
+
+            disable_aspects = os.getenv('DISABLE_ASPECTS', '0') == '1'
+            aspect_max_rows = int(os.getenv('ASPECT_MAX_ROWS', '3000'))
+
+            if disable_aspects:
+                print("Step 5 skipped: DISABLE_ASPECTS=1")
+            elif processed_rows > aspect_max_rows:
+                print(f"Step 5 skipped: processed_rows {processed_rows} > ASPECT_MAX_ROWS {aspect_max_rows}")
+            else:
+                print("Step 5: Analyzing aspect sentiment...")
+                aspect_summary = analyze_aspects_wrapper()
+                aspect_summary_path = os.path.join(OUTPUTS_DIR, 'aspect_sentiment_summary.csv')
+                aspect_summary.to_csv(aspect_summary_path, index=False)
+
             # Step 6: Component Failure Analysis (using src/component_failure_analysis.py)
-            print("Step 6: Analyzing component failures...")
-            failure_components = analyze_component_failures_wrapper()
-            
-            failure_path = os.path.join(OUTPUTS_DIR, 'failure_components_analysis.csv')
-            failure_components.to_csv(failure_path, index=False)
+            disable_failures = os.getenv('DISABLE_FAILURES', '0') == '1'
+            if disable_failures:
+                print("Step 6 skipped: DISABLE_FAILURES=1")
+            elif processed_rows > aspect_max_rows:
+                print(f"Step 6 skipped: processed_rows {processed_rows} > ASPECT_MAX_ROWS {aspect_max_rows}")
+            else:
+                print("Step 6: Analyzing component failures...")
+                failure_components = analyze_component_failures_wrapper()
+                failure_path = os.path.join(OUTPUTS_DIR, 'failure_components_analysis.csv')
+                failure_components.to_csv(failure_path, index=False)
             
             # Step 7: Top Products Breakdown (using src/top_products_breakdown.py)
             print("Step 7: Analyzing top products...")
@@ -493,36 +510,37 @@ def analyze():
             
             products_path = os.path.join(OUTPUTS_DIR, 'top_products_sentiment_breakdown.csv')
             top_products.to_csv(products_path, index=False)
-            # Generate stacked bar chart for top products sentiment breakdown
-            try:
-                if not top_products.empty:
-                    fig, ax = plt.subplots(figsize=(12, 8))
-                    bottom = [0] * len(top_products)
-                    colors = ["#4CAF50", "#FFC107", "#F44336"]
-                    labels = ["Positive", "Neutral", "Negative"]
+            # Generate stacked bar chart for top products sentiment breakdown (optional)
+            if os.getenv('SKIP_PLOTS', '1') != '1':
+                try:
+                    if not top_products.empty:
+                        fig, ax = plt.subplots(figsize=(12, 8))
+                        bottom = [0] * len(top_products)
+                        colors = ["#4CAF50", "#FFC107", "#F44336"]
+                        labels = ["Positive", "Neutral", "Negative"]
 
-                    for i, sentiment in enumerate(["Positive", "Neutral", "Negative"]):
-                        ax.bar(
-                            top_products["ProductName"],
-                            top_products[sentiment],
-                            bottom=bottom,
-                            label=labels[i],
-                            color=colors[i]
-                        )
-                        bottom = [b + v for b, v in zip(bottom, top_products[sentiment])]
+                        for i, sentiment in enumerate(["Positive", "Neutral", "Negative"]):
+                            ax.bar(
+                                top_products["ProductName"],
+                                top_products[sentiment],
+                                bottom=bottom,
+                                label=labels[i],
+                                color=colors[i]
+                            )
+                            bottom = [b + v for b, v in zip(bottom, top_products[sentiment])]
 
-                    ax.set_title("Top Reviewed Products — Sentiment Breakdown")
-                    ax.set_ylabel("Number of Reviews")
-                    ax.set_xlabel("Product Name")
-                    ax.legend()
-                    plt.xticks(rotation=45, ha="right")
-                    plt.tight_layout()
+                        ax.set_title("Top Reviewed Products — Sentiment Breakdown")
+                        ax.set_ylabel("Number of Reviews")
+                        ax.set_xlabel("Product Name")
+                        ax.legend()
+                        plt.xticks(rotation=45, ha="right")
+                        plt.tight_layout()
 
-                    chart_path = os.path.join(OUTPUTS_DIR, 'top_products_sentiment_breakdown.png')
-                    plt.savefig(chart_path, dpi=150)
-                    plt.close()
-            except Exception as chart_err:
-                print(f"Top products chart generation failed: {chart_err}")
+                        chart_path = os.path.join(OUTPUTS_DIR, 'top_products_sentiment_breakdown.png')
+                        plt.savefig(chart_path, dpi=150)
+                        plt.close()
+                except Exception as chart_err:
+                    print(f"Top products chart generation failed: {chart_err}")
             
             # Return results with correct structure
             sentiment_counts = dict(sentiment_counter)
