@@ -19,7 +19,7 @@ services:
       - key: CHUNK_SIZE
         value: "1000"
       - key: ASPECT_MAX_ROWS
-        value: "600"
+        value: "300"
       - key: KEYWORD_MAX_ROWS
         value: "800"
       - key: MIN_REVIEWS_PER_PRODUCT
