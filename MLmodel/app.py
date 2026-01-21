@@ -347,19 +347,19 @@ def analyze():
                 print(f"ERROR saving file: {str(e)}")
                 return jsonify({'error': f'Failed to save file: {str(e)}'}), 500
             
-            # Read CSV with UTF-8 and replace invalid bytes
+            # We'll stream-process CSV to avoid OOM. First, read a small sample for column analysis.
             try:
-                df = pd.read_csv(input_path, encoding='utf-8', encoding_errors='replace')
-                print(f"Successfully read CSV with encoding: utf-8 (encoding_errors='replace')")
+                sample_df = pd.read_csv(input_path, encoding='utf-8', encoding_errors='replace', nrows=5)
+                print(f"Successfully read sample rows for column analysis")
             except Exception as e:
-                print(f"ERROR reading CSV: {str(e)}")
-                return jsonify({'error': f'Failed to read CSV: {str(e)}'}), 500
+                print(f"ERROR reading CSV sample: {str(e)}")
+                return jsonify({'error': f'Failed to read CSV sample: {str(e)}'}), 500
             
             # Step 1: Column Analysis
             print("Step 1: Analyzing columns...")
             try:
-                column_names = df.columns.tolist()
-                first_rows = df.head(5).values.tolist()
+                column_names = sample_df.columns.tolist()
+                first_rows = sample_df.values.tolist()
                 print(f"Columns: {column_names[:5]}...")
                 
                 try:
@@ -390,18 +390,61 @@ def analyze():
                 print(f"ERROR in column analysis: {str(e)}")
                 return jsonify({'error': f'Column analysis failed: {str(e)}'}), 500
             
-            # Step 2: Clean Data
-            print("Step 2: Cleaning data...")
-            cleaned_df = clean_data_pipeline(df, column_mapping)
+            # Step 2 + 3: Stream cleaning + predictions to prevent OOM
+            print("Step 2: Cleaning data (streaming)...")
+            print("Step 3: Generating predictions (streaming)...")
+
             cleaned_path = os.path.join(DATA_DIR, 'uploaded_cleaned.csv')
-            cleaned_df.to_csv(cleaned_path, index=False)
-            
-            # Step 3: Generate ML Predictions
-            print("Step 3: Generating predictions...")
-            predictions_df = generate_ml_predictions(cleaned_df)
-            # Save predictions to outputs directory so they are downloadable via /outputs
             predictions_path = os.path.join(OUTPUTS_DIR, 'predictions.csv')
-            predictions_df.to_csv(predictions_path, index=False)
+
+            # Truncate output files before appending
+            open(cleaned_path, 'w').close()
+            open(predictions_path, 'w').close()
+
+            # Load model/vectorizer once
+            model_path = os.path.join(MODELS_DIR, 'logistic_model.joblib')
+            vectorizer_path = os.path.join(MODELS_DIR, 'tfidf_vectorizer.joblib')
+            model = None
+            vectorizer = None
+            if os.path.exists(model_path) and os.path.exists(vectorizer_path):
+                model = joblib.load(model_path)
+                vectorizer = joblib.load(vectorizer_path)
+            else:
+                print("WARNING: Models not found; fallback to rating-based sentiment where available")
+
+            chunk_size = int(os.getenv('CHUNK_SIZE', '5000'))
+            processed_rows = 0
+            sentiment_counter = Counter()
+            first_clean_header = True
+            first_pred_header = True
+
+            for chunk in pd.read_csv(input_path, encoding='utf-8', encoding_errors='replace', chunksize=chunk_size):
+                cleaned_chunk = clean_data_pipeline(chunk, column_mapping)
+                processed_rows += len(cleaned_chunk)
+
+                # Append cleaned chunk
+                cleaned_chunk.to_csv(cleaned_path, mode='a', index=False, header=first_clean_header)
+                first_clean_header = False
+
+                # Predictions for this chunk
+                if model is not None and vectorizer is not None and not cleaned_chunk.empty:
+                    X = vectorizer.transform(cleaned_chunk['text'])
+                    cleaned_chunk['predicted_sentiment'] = model.predict(X)
+                else:
+                    # Fallback to existing sentiment column
+                    cleaned_chunk['predicted_sentiment'] = cleaned_chunk.get('sentiment', 'Neutral')
+
+                # Update summary counts
+                sentiment_counter.update(cleaned_chunk['predicted_sentiment'].value_counts().to_dict())
+
+                # Append predictions chunk
+                cleaned_chunk.to_csv(predictions_path, mode='a', index=False, header=first_pred_header)
+                first_pred_header = False
+            
+            print(f"Streaming complete. Processed rows: {processed_rows}")
+            
+            # For downstream steps, read predictions lazily (wrappers may load fully)
+            predictions_df = None
             
             # Step 4: Extract Keywords (using src/keyword_drivers.py)
             print("Step 4: Extracting keywords...")
@@ -471,12 +514,12 @@ def analyze():
                 print(f"Top products chart generation failed: {chart_err}")
             
             # Return results with correct structure
-            sentiment_counts = predictions_df['predicted_sentiment'].value_counts().to_dict()
+            sentiment_counts = dict(sentiment_counter)
             return jsonify({
                 'status': 'success',
                 'message': 'Analysis completed successfully',
                 'summary': {
-                    'total_reviews': len(df),
+                    'total_reviews': processed_rows,
                     'sentiment_summary': {
                         'positive': sentiment_counts.get('Positive', 0),
                         'negative': sentiment_counts.get('Negative', 0),
