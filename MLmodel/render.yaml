@@ -20,6 +20,10 @@ services:
         value: "2000"
       - key: ASPECT_MAX_ROWS
         value: "3000"
+      - key: MIN_REVIEWS_PER_PRODUCT
+        value: "10"
+      - key: MIN_NEGATIVE_REVIEWS
+        value: "5"
       - key: DISABLE_ASPECTS
         value: "0"
       - key: DISABLE_FAILURES

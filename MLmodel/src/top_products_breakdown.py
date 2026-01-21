@@ -10,11 +10,11 @@ import pandas as pd
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 
 # ----------------------------
-# CONFIG
+# CONFIG (env-overridable thresholds)
 # ----------------------------
-TOP_N_PRODUCTS = 10
-TOP_N_KEYWORDS = 5  # top keywords per sentiment per product
-MIN_REVIEWS_PER_PRODUCT = 30
+TOP_N_PRODUCTS = int(os.getenv("TOP_N_PRODUCTS", "10"))
+TOP_N_KEYWORDS = int(os.getenv("TOP_N_KEYWORDS", "5"))  # top keywords per sentiment per product
+MIN_REVIEWS_PER_PRODUCT = int(os.getenv("MIN_REVIEWS_PER_PRODUCT", "30"))
 STOP_WORDS = ENGLISH_STOP_WORDS.union({"very", "really", "quite", "product", "item"})
 
 BASE_DIR = Path(__file__).resolve().parents[1]

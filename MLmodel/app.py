@@ -222,8 +222,8 @@ def analyze_aspects_wrapper(nrows=None):
     return summary_df
 
 
-def analyze_component_failures_wrapper(nrows=None):
-    """Analyze component failures using src/component_failure_analysis.py"""
+def analyze_component_failures_wrapper(nrows=None, top_products_df=None):
+    """Analyze component failures using src/component_failure_analysis.py, consolidated over top products"""
     predictions_path = os.path.join(OUTPUTS_DIR, 'predictions.csv')
     df = pd.read_csv(predictions_path)
     
@@ -234,24 +234,33 @@ def analyze_component_failures_wrapper(nrows=None):
     # Align column names expected by src/component_failure_analysis.py
     df = df.rename(columns={'predicted_sentiment': 'sentiment_pred'})
 
-    results = []
-    if 'ProductName' in df.columns:
-        for product in df['ProductName'].unique():
-            failures = analyze_product_failures(product, df)
-            if failures:
-                results.append({
-                    'product': product,
-                    'components': ', '.join(failures)
-                })
+    # Determine product list (prefer top products if provided)
+    products = []
+    if top_products_df is not None and 'ProductName' in top_products_df.columns:
+        products = list(top_products_df['ProductName'])
+    elif 'ProductName' in df.columns:
+        products = list(df['ProductName'].unique())
+    
+    consolidated = []
+    for idx, product in enumerate(products):
+        failures = analyze_product_failures(product, df)
+        if failures:
+            consolidated.append({
+                'product_rank': idx + 1,
+                'ProductName': product,
+                'top_component_1': failures[0] if len(failures) > 0 else '',
+                'top_component_2': failures[1] if len(failures) > 1 else '',
+                'top_component_3': failures[2] if len(failures) > 2 else '',
+            })
 
-    if not results:
-        return pd.DataFrame(columns=['product', 'components'])
+    if not consolidated:
+        return pd.DataFrame(columns=['product_rank', 'ProductName', 'top_component_1', 'top_component_2', 'top_component_3'])
 
-    return pd.DataFrame(results)
+    return pd.DataFrame(consolidated)
 
 
 def analyze_top_products_wrapper():
-    """Analyze top products using src/top_products_breakdown.py"""
+    """Analyze top products using src/top_products_breakdown.py logic and schema"""
     predictions_path = os.path.join(OUTPUTS_DIR, 'predictions.csv')
     df = pd.read_csv(predictions_path)
     tfidf = joblib.load(os.path.join(MODELS_DIR, 'tfidf_vectorizer.joblib'))
@@ -259,35 +268,45 @@ def analyze_top_products_wrapper():
     # Align column names expected by src/top_products_breakdown.py
     df = df.rename(columns={'predicted_sentiment': 'sentiment_pred'})
     
+    # Define output schema to match src/top_products_breakdown.py
     empty_cols = [
-        'ProductName', 'ReviewCount', 'Positive', 'Negative',
-        'Neutral', 'TopPositiveKeywords', 'TopNegativeKeywords'
+        'ProductName', 'total_reviews', 'Positive', 'Neutral', 'Negative',
+        'Total', 'top_positive_keywords', 'top_negative_keywords'
     ]
 
     if 'ProductName' not in df.columns or df['ProductName'].isna().all():
         return pd.DataFrame(columns=empty_cols)
     
-    # Get top 10 products by review count and filter invalid names
-    top_products = df['ProductName'].value_counts().head(10).index.tolist()
-    top_products = [p for p in top_products if pd.notna(p) and str(p).strip() and str(p).strip().lower() != 'nan']
+    # Compute review counts per product (matches src logic)
+    product_counts = df.groupby('ProductName').size().reset_index(name='total_reviews')
+    # Top 10 products by total reviews
+    top_products = product_counts.sort_values('total_reviews', ascending=False).head(10)
     
-    results = []
-    for product in top_products:
-        product_df = df[df['ProductName'] == product]
-        keywords = get_product_keywords(product, product_df, tfidf)
-        
-        sentiment_counts = product_df['sentiment_pred'].value_counts()
-        results.append({
-            'ProductName': product,
-            'ReviewCount': len(product_df),
-            'Positive': sentiment_counts.get('Positive', 0),
-            'Negative': sentiment_counts.get('Negative', 0),
-            'Neutral': sentiment_counts.get('Neutral', 0),
-            'TopPositiveKeywords': ', '.join(keywords.get('positive_keywords', [])),
-            'TopNegativeKeywords': ', '.join(keywords.get('negative_keywords', []))
-        })
+    # Sentiment breakdown for top products
+    breakdown_df = df[df['ProductName'].isin(top_products['ProductName'])] \
+        .groupby('ProductName')['sentiment_pred'] \
+        .value_counts() \
+        .unstack(fill_value=0)
+    # Ensure consistent sentiment columns order
+    breakdown_df = breakdown_df.reindex(columns=['Positive', 'Neutral', 'Negative'], fill_value=0)
+    breakdown_df['Total'] = breakdown_df.sum(axis=1)
     
-    return pd.DataFrame(results, columns=empty_cols)
+    # Merge counts + breakdown
+    merged = top_products.merge(breakdown_df, on='ProductName')
+    
+    # Add keywords per product
+    pos_keywords_list = []
+    neg_keywords_list = []
+    for product in merged['ProductName']:
+        keywords = get_product_keywords(product, df, tfidf)
+        pos_keywords_list.append(', '.join(keywords.get('positive_keywords', [])))
+        neg_keywords_list.append(', '.join(keywords.get('negative_keywords', [])))
+    
+    merged['top_positive_keywords'] = pos_keywords_list
+    merged['top_negative_keywords'] = neg_keywords_list
+    
+    # Return with exact column order
+    return merged[empty_cols]
 
 
 def _heuristic_column_mapping(column_names: list[str]) -> dict:
@@ -491,7 +510,6 @@ def analyze():
             
             # Step 5: Aspect Sentiment Analysis (using src/aspect_sentiment_rules.py)
             aspect_summary = pd.DataFrame()
-            failure_components = pd.DataFrame()
 
             disable_aspects = os.getenv('DISABLE_ASPECTS', '0') == '1'
             aspect_max_rows = int(os.getenv('ASPECT_MAX_ROWS', '3000'))
@@ -508,24 +526,9 @@ def analyze():
                 aspect_summary = analyze_aspects_wrapper(nrows=None)
                 aspect_summary_path = os.path.join(OUTPUTS_DIR, 'aspect_sentiment_summary.csv')
                 aspect_summary.to_csv(aspect_summary_path, index=False)
-
-            # Step 6: Component Failure Analysis (using src/component_failure_analysis.py)
-            disable_failures = os.getenv('DISABLE_FAILURES', '0') == '1'
-            if disable_failures:
-                print("Step 6 skipped: DISABLE_FAILURES=1")
-            elif processed_rows > aspect_max_rows:
-                print(f"Step 6: Sampling {aspect_max_rows} rows for failure analysis (total {processed_rows})")
-                failure_components = analyze_component_failures_wrapper(nrows=aspect_max_rows)
-                failure_path = os.path.join(OUTPUTS_DIR, 'failure_components_analysis.csv')
-                failure_components.to_csv(failure_path, index=False)
-            else:
-                print("Step 6: Analyzing component failures...")
-                failure_components = analyze_component_failures_wrapper(nrows=None)
-                failure_path = os.path.join(OUTPUTS_DIR, 'failure_components_analysis.csv')
-                failure_components.to_csv(failure_path, index=False)
             
-            # Step 7: Top Products Breakdown (using src/top_products_breakdown.py)
-            print("Step 7: Analyzing top products...")
+            # Step 6: Top Products Breakdown (using src/top_products_breakdown.py)
+            print("Step 6: Analyzing top products...")
             top_products = analyze_top_products_wrapper()
             
             products_path = os.path.join(OUTPUTS_DIR, 'top_products_sentiment_breakdown.csv')
@@ -561,6 +564,22 @@ def analyze():
                         plt.close()
                 except Exception as chart_err:
                     print(f"Top products chart generation failed: {chart_err}")
+            
+            # Step 7: Component Failure Analysis (using src/component_failure_analysis.py)
+            failure_components = pd.DataFrame()
+            disable_failures = os.getenv('DISABLE_FAILURES', '0') == '1'
+            if disable_failures:
+                print("Step 7 skipped: DISABLE_FAILURES=1")
+            elif processed_rows > aspect_max_rows:
+                print(f"Step 7: Sampling {aspect_max_rows} rows for failure analysis (total {processed_rows})")
+                failure_components = analyze_component_failures_wrapper(nrows=aspect_max_rows, top_products_df=top_products)
+                failure_path = os.path.join(OUTPUTS_DIR, 'failure_components_analysis.csv')
+                failure_components.to_csv(failure_path, index=False)
+            else:
+                print("Step 7: Analyzing component failures...")
+                failure_components = analyze_component_failures_wrapper(nrows=None, top_products_df=top_products)
+                failure_path = os.path.join(OUTPUTS_DIR, 'failure_components_analysis.csv')
+                failure_components.to_csv(failure_path, index=False)
             
             # Return results with correct structure
             sentiment_counts = dict(sentiment_counter)

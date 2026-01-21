@@ -1,3 +1,4 @@
+import os
 import re
 from collections import Counter
 from pathlib import Path
@@ -21,11 +22,11 @@ except LookupError:
     nltk.download("averaged_perceptron_tagger_eng", quiet=True)
 
 # ----------------------------
-# CONFIG
+# CONFIG (env-overridable thresholds)
 # ----------------------------
-MIN_NEGATIVE_REVIEWS = 15
-TOP_N_COMPONENTS = 3  # Only top 3 for consolidated view
-TOP_N_PRODUCTS_FOR_CHARTS = 3
+MIN_NEGATIVE_REVIEWS = int(os.getenv("MIN_NEGATIVE_REVIEWS", "15"))
+TOP_N_COMPONENTS = int(os.getenv("TOP_N_COMPONENTS", "3"))  # Only top 3 for consolidated view
+TOP_N_PRODUCTS_FOR_CHARTS = int(os.getenv("TOP_N_PRODUCTS_FOR_CHARTS", "3"))
 
 GENERIC_NOUNS = {
     "product", "item", "thing", "time", "day", "month", "week", "year",
