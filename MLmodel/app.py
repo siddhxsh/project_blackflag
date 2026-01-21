@@ -515,7 +515,7 @@ def analyze():
             
             # Return results with correct structure
             sentiment_counts = dict(sentiment_counter)
-            return jsonify({
+            response = jsonify({
                 'status': 'success',
                 'message': 'Analysis completed successfully',
                 'summary': {
@@ -542,6 +542,11 @@ def analyze():
                     'top_products': 'top_products_sentiment_breakdown.csv'
                 }
             })
+            # Prevent frontend caching
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            return response
                 
         finally:
             if not IS_WINDOWS and is_main_thread:
@@ -751,13 +756,18 @@ Format the response in clean markdown with clear headers and bullet points. Be s
         else:
             return jsonify({'error': f'Invalid llm_provider: {llm_provider}. Use "gemini" or "openrouter"'}), 400
         
-        return jsonify({
+        response = jsonify({
             'status': 'success',
             'llm_provider': llm_provider,
             'total_reviews': total_reviews,
             'sentiment_summary': sentiment_counts,
             'executive_summary': formatted_response
         })
+        # Prevent frontend caching
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     
     except requests.exceptions.HTTPError as e:
         return jsonify({
@@ -782,7 +792,13 @@ def compare_models():
     """
     try:
         # Always run fresh comparison to avoid stale cached metrics
-        return run_model_comparison()
+        response = run_model_comparison()
+        # Prevent frontend caching
+        if hasattr(response, 'headers'):
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+        return response
     
     except Exception as e:
         print(f"Error in compare_models: {str(e)}")
