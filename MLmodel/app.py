@@ -259,11 +259,17 @@ def analyze_top_products_wrapper():
     # Align column names expected by src/top_products_breakdown.py
     df = df.rename(columns={'predicted_sentiment': 'sentiment_pred'})
     
+    empty_cols = [
+        'ProductName', 'ReviewCount', 'Positive', 'Negative',
+        'Neutral', 'TopPositiveKeywords', 'TopNegativeKeywords'
+    ]
+
     if 'ProductName' not in df.columns or df['ProductName'].isna().all():
-        return pd.DataFrame()
+        return pd.DataFrame(columns=empty_cols)
     
-    # Get top 10 products by review count
+    # Get top 10 products by review count and filter invalid names
     top_products = df['ProductName'].value_counts().head(10).index.tolist()
+    top_products = [p for p in top_products if pd.notna(p) and str(p).strip() and str(p).strip().lower() != 'nan']
     
     results = []
     for product in top_products:
@@ -281,7 +287,7 @@ def analyze_top_products_wrapper():
             'TopNegativeKeywords': ', '.join(keywords.get('negative_keywords', []))
         })
     
-    return pd.DataFrame(results)
+    return pd.DataFrame(results, columns=empty_cols)
 
 
 def _heuristic_column_mapping(column_names: list[str]) -> dict:
@@ -643,19 +649,21 @@ def formulate():
         
         # Read aspect sentiment if exists
         aspects_summary = ""
-        if os.path.exists(aspects_path):
+        if os.path.exists(aspects_path) and os.path.getsize(aspects_path) > 0:
             aspects_df = pd.read_csv(aspects_path)
-            aspects_summary = aspects_df.to_string(index=False)
+            if not aspects_df.empty:
+                aspects_summary = aspects_df.to_string(index=False)
         
         # Read top products if exists
         top_products_summary = ""
-        if os.path.exists(top_products_path):
+        if os.path.exists(top_products_path) and os.path.getsize(top_products_path) > 0:
             top_products_df = pd.read_csv(top_products_path)
-            top_products_summary = top_products_df.head(5).to_string(index=False)
+            if not top_products_df.empty:
+                top_products_summary = top_products_df.head(5).to_string(index=False)
         
         # Read failures if exists
         failures_summary = ""
-        if os.path.exists(failures_path):
+        if os.path.exists(failures_path) and os.path.getsize(failures_path) > 0:
             failures_df = pd.read_csv(failures_path)
             if not failures_df.empty:
                 failures_summary = failures_df.head(10).to_string(index=False)
@@ -681,11 +689,11 @@ def formulate():
         # Read keywords
         pos_keywords_list = []
         neg_keywords_list = []
-        if os.path.exists(pos_keywords_path):
+        if os.path.exists(pos_keywords_path) and os.path.getsize(pos_keywords_path) > 0:
             pos_kw_df = pd.read_csv(pos_keywords_path)
             if 'word' in pos_kw_df.columns:
                 pos_keywords_list = pos_kw_df['word'].head(10).tolist()
-        if os.path.exists(neg_keywords_path):
+        if os.path.exists(neg_keywords_path) and os.path.getsize(neg_keywords_path) > 0:
             neg_kw_df = pd.read_csv(neg_keywords_path)
             if 'word' in neg_kw_df.columns:
                 neg_keywords_list = neg_kw_df['word'].head(10).tolist()
