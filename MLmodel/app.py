@@ -869,8 +869,8 @@ def run_model_comparison():
         # Only stratify if we have at least 2 samples per class
         if (class_counts >= 2).all():
             stratify = y
-                else:
-                    print(f"WARNING: Skipping stratification due to class imbalance: {class_counts.to_dict()}")
+        else:
+            print(f"WARNING: Skipping stratification due to class imbalance: {class_counts.to_dict()}")
         
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=0.2, random_state=random_seed, stratify=stratify
