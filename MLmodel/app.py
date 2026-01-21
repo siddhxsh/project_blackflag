@@ -796,19 +796,15 @@ def compare_models():
 def run_model_comparison():
     """Run VADER vs Logistic Regression comparison"""
     try:
-        # Load cleaned data
-        csv_files = [f for f in os.listdir(DATA_DIR) if 'cleaned' in f.lower() and f.endswith('.csv')]
-        if not csv_files:
-            csv_files = [f for f in os.listdir(DATA_DIR) if f.endswith('.csv')]
+        # Load the most recent cleaned data from the current /analyze run
+        data_path = os.path.join(DATA_DIR, 'uploaded_cleaned.csv')
         
-        if not csv_files:
-            return jsonify({'error': 'No data files found'}), 400
-        
-        data_path = os.path.join(DATA_DIR, csv_files[0])
+        if not os.path.exists(data_path):
+            return jsonify({'error': 'No cleaned data found. Run /analyze first.'}), 400
         
         # Read CSV with UTF-8 and replace invalid bytes
         df = pd.read_csv(data_path, encoding='utf-8', encoding_errors='replace')
-        print(f"Read comparison data with utf-8 (errors='replace')")
+        print(f"Read comparison data from {data_path} with utf-8 (errors='replace')")
         
         # Prepare data
         TEXT_COLUMN = "text"
